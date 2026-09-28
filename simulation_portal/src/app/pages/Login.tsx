@@ -1,6 +1,6 @@
 import { useState, useEffect, FormEvent } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { getUserVerdict, loginBank, reportHoneypotHit } from '../../lib/portalApi';
+import { loginBank, reportHoneypotHit } from '../../lib/portalApi';
 import { useBehavioralTracker } from '../../hooks/useBehavioralTracker';
 import { readPortalSession, writePortalSession } from '../../lib/portalSession';
 
@@ -51,7 +51,9 @@ export default function Login() {
         sessionId: tracker.sessionId,
       });
 
-      const verdict = await getUserVerdict(loginData.user_id);
+      // The login endpoint already returns the verdict for this session. Reuse it
+      // instead of issuing a second history lookup before completing sign-in.
+      const verdict = loginData;
 
       writePortalSession({
         sessionId: loginData.sessionId,

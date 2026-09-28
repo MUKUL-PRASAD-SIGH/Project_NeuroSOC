@@ -12,9 +12,18 @@ export interface BehavioralEvent {
   scrollY?: number;
 }
 
-export function useBehavioralTracker(userId: string) {
+export interface BehavioralTrackerOptions {
+  userId?: string;
+  sessionId?: string | null;
+  page?: string;
+}
+
+export function useBehavioralTracker(input: string | BehavioralTrackerOptions) {
+  const options = typeof input === 'string' ? { userId: input } : input;
+  const userId = options.userId || 'anonymous';
+  const page = options.page;
   const eventBuffer = useRef<BehavioralEvent[]>([]);
-  const sessionId = useRef(Math.random().toString(36).substring(7));
+  const sessionId = useRef(options.sessionId || Math.random().toString(36).substring(7));
   const isTracking = useRef(false);
 
   const flushEvents = useCallback(async () => {
@@ -28,13 +37,14 @@ export function useBehavioralTracker(userId: string) {
         userId,
         sessionId: sessionId.current,
         events: eventsToFlush,
+        page,
       });
     } catch (error) {
       console.error('Failed to flush behavioral events:', error);
       // Put events back if failed? Or just drop for simplicity in simulation
       eventBuffer.current = [...eventsToFlush, ...eventBuffer.current];
     }
-  }, [userId]);
+  }, [page, userId]);
 
   const addEvent = useCallback((event: BehavioralEvent) => {
     if (!isTracking.current) return;
