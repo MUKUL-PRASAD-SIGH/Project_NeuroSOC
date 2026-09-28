@@ -1,0 +1,52 @@
+# Repository dump artifacts
+.repo_dump_meta.json
+repo_dump.md
+generate_repo_markdown.py
+
+# Local environment files
+.env
+.env.local
+
+# Python artifacts
+__pycache__/
+*.pyc
+data/behavioral_profiles/
+models/*.pt
+models/*.json
+!models/model_version.json
+models/candidates/*
+!models/candidates/.gitkeep
+
+# JavaScript build artifacts
+node_modules/
+dist/
+Docs/
+artifacts/demo/
+
+# Logs
+*.log
+tmp_logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+
+# Documentation: only the root README.md is published
+*.md
+!/README.md
+Docs/
+docs/
+builderA/
+builderB/
+builderC/
+builderD/
+
+# Extra local files
+.vscode/
+.vite/
+/package-lock.json
+models/tmp*
+artifacts/artifacts/

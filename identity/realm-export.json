@@ -1,0 +1,55 @@
+{
+  "realm": "neurosoc",
+  "enabled": true,
+  "displayName": "NeuroSOC Pilot",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": true,
+  "roles": {
+    "realm": [
+      { "name": "analyst", "description": "Review alerts and evidence" },
+      { "name": "operator", "description": "Run approved response actions" },
+      { "name": "admin", "description": "Manage platform configuration" },
+      { "name": "auditor", "description": "Read audit and compliance records" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "neurosoc-dashboard",
+      "name": "NeuroSOC Dashboard",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://localhost:3000/*",
+        "http://localhost:5174/*"
+      ],
+      "webOrigins": [
+        "http://localhost:3000",
+        "http://localhost:5174"
+      ],
+      "attributes": {
+        "post.logout.redirect.uris": "http://localhost:3000/*##http://localhost:5174/*"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "pilot-analyst",
+      "enabled": true,
+      "email": "pilot-analyst@localhost",
+      "emailVerified": true,
+      "firstName": "Pilot",
+      "lastName": "Analyst",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "change-me-local-only",
+          "temporary": true
+        }
+      ],
+      "realmRoles": ["analyst"]
+    }
+  ]
+}
