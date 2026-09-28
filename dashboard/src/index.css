@@ -1,0 +1,203 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html {
+  background: #0b0f19;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #0b0f19;
+  color: #e6ebf4;
+  font-family: "Inter", "IBM Plex Sans", system-ui, sans-serif;
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+::selection {
+  background: rgba(79, 168, 247, 0.3);
+}
+
+@layer components {
+  .soc-shell {
+    @apply mx-auto w-full max-w-[1680px] px-4 pb-10 pt-6 md:px-6 lg:px-8;
+  }
+
+  .soc-glass {
+    @apply rounded-lg border border-soc-border bg-soc-panel shadow-panel;
+  }
+
+  .soc-inset {
+    @apply rounded-md border border-soc-border/80 bg-soc-panelSoft/60;
+  }
+
+  .soc-kicker {
+    @apply text-[11px] font-semibold uppercase tracking-[0.08em] text-soc-muted;
+  }
+
+  .soc-title {
+    @apply text-2xl font-semibold leading-tight tracking-tight text-soc-text md:text-[28px];
+  }
+
+  .soc-section-title {
+    @apply text-base font-semibold tracking-tight text-soc-text;
+  }
+
+  .soc-tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .soc-btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md border border-soc-border bg-soc-panelSoft px-3 py-1.5 text-xs font-medium text-soc-text transition-colors hover:border-soc-electric/50 hover:bg-soc-panelSoft/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-soc-electric/50 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .soc-btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-md border border-soc-electric/60 bg-soc-electric/15 px-3 py-1.5 text-xs font-medium text-soc-electric transition-colors hover:bg-soc-electric/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-soc-electric/50 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+}
+
+/* Normalise text treatments used across components: calmer tracking. */
+.uppercase[class*="tracking-[0.1"],
+.uppercase[class*="tracking-[0.2"] {
+  letter-spacing: 0.08em;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a3448 transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #2a3448;
+  border-radius: 9999px;
+}
+
+.soc-hacker-alert {
+  border-left-width: 3px;
+}
+
+.soc-threat-dot {
+  position: relative;
+  transform: translate(-50%, -50%);
+}
+
+.soc-threat-dot span,
+.soc-threat-dot::after {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: #ff4d5a;
+}
+
+.soc-threat-dot span {
+  background: #ef5b67;
+  box-shadow: 0 0 0 2px rgba(239, 91, 103, 0.25);
+}
+
+.soc-threat-dot::after {
+  content: "";
+  background: #ef5b67;
+  animation: threatPulse 2.4s ease-out infinite;
+  opacity: 0.35;
+}
+
+/* Kept as a no-op hook so existing markup stays valid; no floating motion. */
+.soc-tilt-panel {
+  position: relative;
+}
+
+.soc-stage-node {
+  position: relative;
+  transition:
+    border-color 200ms ease,
+    background-color 200ms ease;
+}
+
+.soc-stage-node-active {
+  box-shadow: 0 0 0 1px rgba(79, 168, 247, 0.25);
+}
+
+.soc-live-dot {
+  position: relative;
+  display: inline-block;
+  height: 8px;
+  width: 8px;
+  border-radius: 9999px;
+  background: #3cc28f;
+}
+
+.soc-live-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: inherit;
+  animation: threatPulse 2.4s ease-out infinite;
+}
+
+.leaflet-container {
+  background: #0e1320;
+  font-family: "Inter", system-ui, sans-serif;
+}
+
+.leaflet-control-attribution {
+  background: rgba(11, 15, 25, 0.85) !important;
+  color: #8a96ab !important;
+  border-radius: 4px;
+  padding: 0 6px !important;
+  margin: 0 6px 6px 0 !important;
+  font-size: 10px !important;
+}
+
+.leaflet-control-attribution a {
+  color: #4fa8f7 !important;
+}
+
+.soc-tooltip.leaflet-tooltip {
+  background: #111726;
+  border: 1px solid #232c40;
+  border-radius: 6px;
+  color: #e6ebf4;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+}
+
+@keyframes threatPulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.45;
+  }
+
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
