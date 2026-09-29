@@ -159,6 +159,17 @@ def test_state_changing_event_and_response_routes_require_operator_or_admin(path
     assert required_roles_for_route(path, "POST") == RESPONSE_ROLES
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/alerts/portal-abc123/decision",
+        "/api/v1/alerts/portal-abc123/decision",
+    ],
+)
+def test_alert_decision_route_requires_operator_or_admin(path):
+    assert required_roles_for_route(path, "POST") == RESPONSE_ROLES
+
+
 def test_websocket_and_unknown_route_policies_require_known_roles():
     assert required_roles_for_route("/ws/alerts", "WEBSOCKET") == KNOWN_ROLES
     assert required_roles_for_route("/future/endpoint", "GET") == KNOWN_ROLES

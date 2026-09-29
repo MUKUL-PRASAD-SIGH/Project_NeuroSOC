@@ -12,9 +12,9 @@ import uuid
 from collections import OrderedDict, deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 from urllib import error as urllib_error
 from urllib import request as urllib_request
@@ -46,6 +46,7 @@ os.environ.setdefault("BEHAVIOR_PROFILE_DIR", str(REPO_ROOT / "data" / "behavior
 
 from core.behavioral.signals import extract_session_vector
 from core.engine import DecisionEngine, ThreatVerdict
+from core.xgboost.model import CLASS_NAMES as TRAINING_CLASS_NAMES
 from core.auth import (
     AuthorizationError,
     MODEL_ADMIN_ROLES,
@@ -323,6 +324,20 @@ class WebAttackDetectedRequest(StrictRequestModel):
     source_ip: SourceAddress = "unknown"
 
 
+class AlertDecisionRequest(StrictRequestModel):
+    decision: Literal["confirm_threat", "false_positive", "restore_access", "escalate"]
+    notes: Annotated[StrictStr, Field(max_length=2048)] | None = None
+
+
+class AlertDecisionResponse(StrictResponseModel):
+    sessionId: StrictStr
+    decision: StrictStr
+    status: StrictStr
+    decidedBy: StrictStr
+    decidedAt: datetime
+    trainingLabelWritten: StrictStr | None = None
+
+
 class RootResponse(StrictResponseModel):
     service: StrictStr
     phase: StrictInt
@@ -418,6 +433,8 @@ class AlertResponse(StrictResponseModel):
     dimensions: list[AlertDimensionResponse]
     recentVerdicts: list[RecentVerdictResponse]
     modelVersion: StrictStr
+    status: StrictStr = "new"
+    decision: StrictStr | None = None
 
 
 class RawAlertResponse(StrictResponseModel):
@@ -1019,6 +1036,43 @@ class VerdictRepository:
                     )
                     """
                 )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS alert_decisions (
+                        id BIGSERIAL PRIMARY KEY,
+                        session_id TEXT NOT NULL,
+                        decision TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        decided_by TEXT NOT NULL,
+                        decided_by_roles JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        notes TEXT,
+                        decided_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_alert_decisions_session
+                    ON alert_decisions (session_id, decided_at DESC)
+                    """
+                )
+                # Same shape feedback-service writes to; an analyst decision is a human label
+                # that retraining should trust at least as much as the heuristic sandbox labels.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS labeled_training_data (
+                        id BIGSERIAL PRIMARY KEY,
+                        session_id TEXT UNIQUE NOT NULL,
+                        features JSONB NOT NULL,
+                        label TEXT NOT NULL,
+                        confidence DOUBLE PRECISION NOT NULL,
+                        attack_type TEXT,
+                        trigger_reason TEXT,
+                        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
         conn.close()
 
     def record_audit_event(self, event: dict[str, Any]) -> None:
@@ -1168,6 +1222,117 @@ class VerdictRepository:
                     )
                     rows = cur.fetchall() or []
             return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def get_verdict_by_session(self, session_id: str) -> dict[str, Any] | None:
+        conn = self._connect()
+        if conn is None:
+            return None
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT session_id, user_id, source_ip, verdict, confidence,
+                               xgb_class, features, model_version, timestamp
+                        FROM verdicts
+                        WHERE session_id = %s
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT 1
+                        """,
+                        (session_id,),
+                    )
+                    row = cur.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def record_alert_decision(
+        self,
+        session_id: str,
+        decision: str,
+        status: str,
+        decided_by: str,
+        decided_by_roles: list[str],
+        notes: str | None,
+    ) -> dict[str, Any] | None:
+        conn = self._connect()
+        if conn is None:
+            return None
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO alert_decisions (
+                            session_id, decision, status, decided_by, decided_by_roles, notes
+                        ) VALUES (%s, %s, %s, %s, %s, %s)
+                        RETURNING session_id, decision, status, decided_by, decided_at
+                        """,
+                        (session_id, decision, status, decided_by, Json(decided_by_roles), notes),
+                    )
+                    row = cur.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def latest_decision_for_session(self, session_id: str) -> dict[str, Any] | None:
+        conn = self._connect()
+        if conn is None:
+            return None
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT session_id, decision, status, decided_by, decided_at
+                        FROM alert_decisions
+                        WHERE session_id = %s
+                        ORDER BY decided_at DESC, id DESC
+                        LIMIT 1
+                        """,
+                        (session_id,),
+                    )
+                    row = cur.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def write_labeled_training_row(
+        self,
+        session_id: str,
+        features: list[float],
+        label: str,
+        confidence: float,
+        attack_type: str,
+        trigger_reason: str,
+        metadata: dict[str, Any],
+    ) -> bool:
+        conn = self._connect()
+        if conn is None:
+            return False
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO labeled_training_data (
+                            session_id, features, label, confidence, attack_type, trigger_reason, metadata, created_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                        ON CONFLICT (session_id) DO UPDATE
+                        SET features = EXCLUDED.features,
+                            label = EXCLUDED.label,
+                            confidence = EXCLUDED.confidence,
+                            attack_type = EXCLUDED.attack_type,
+                            trigger_reason = EXCLUDED.trigger_reason,
+                            metadata = EXCLUDED.metadata,
+                            created_at = NOW()
+                        """,
+                        (session_id, Json(features), label, confidence, attack_type, trigger_reason, Json(metadata)),
+                    )
+            return True
         finally:
             conn.close()
 
@@ -1390,8 +1555,10 @@ def _format_alert_payload(
     recent_verdicts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     user_id = str(verdict.get("user_id", "unknown-user"))
+    session_id = str(verdict.get("session_id", f"alert-{uuid.uuid4().hex[:8]}"))
+    decision_record = runtime.decision_for_session(session_id) if "runtime" in globals() else None
     return {
-        "id": verdict.get("session_id", f"alert-{uuid.uuid4().hex[:8]}"),
+        "id": session_id,
         "severity": _severity_for_verdict(str(verdict.get("verdict", "")), float(verdict.get("confidence", 0.0))),
         "verdict": verdict.get("verdict", "INCONCLUSIVE"),
         "message": _message_for_verdict(verdict),
@@ -1408,6 +1575,8 @@ def _format_alert_payload(
             else _format_recent_verdicts(recent_verdicts)
         ),
         "modelVersion": verdict.get("model_version", runtime.engine.current_model_version if "runtime" in globals() else "0.0.0"),
+        "status": (decision_record or {}).get("status", "new"),
+        "decision": (decision_record or {}).get("decision"),
     }
 
 
@@ -1499,6 +1668,31 @@ def _promote_verdict(
     return verdict
 
 
+# An analyst decision moves an alert out of "new". confirm_threat/false_positive are terminal
+# judgements (closed); restore_access/escalate keep the alert active under further review.
+DECISION_STATUS_BY_DECISION: dict[str, str] = {
+    "confirm_threat": "closed",
+    "false_positive": "closed",
+    "restore_access": "triaged",
+    "escalate": "triaged",
+}
+# Only these two decisions map cleanly onto the fixed CLASS_NAMES taxonomy used for training.
+TRAINING_LABEL_DECISIONS = frozenset({"confirm_threat", "false_positive"})
+
+
+def _coerce_verdict_features_for_training(verdict: dict[str, Any]) -> list[float]:
+    raw_features = verdict.get("features")
+    if isinstance(raw_features, list) and raw_features:
+        vector = [float(value) for value in raw_features[:80]]
+        if len(vector) < 80:
+            vector.extend([0.0] * (80 - len(vector)))
+        return vector
+    features_dict = verdict.get("features_dict")
+    if isinstance(features_dict, dict):
+        return VerdictRepository._ordered_flow_features(features_dict)
+    return [0.0] * 80
+
+
 class InferenceRuntime:
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -1510,6 +1704,7 @@ class InferenceRuntime:
         self._processed_messages = 0
         self._latest_verdicts: deque[dict[str, Any]] = deque(maxlen=LATEST_VERDICTS_LIMIT)
         self._latest_alerts: deque[dict[str, Any]] = deque(maxlen=LATEST_VERDICTS_LIMIT)
+        self._alert_decisions: dict[str, dict[str, Any]] = {}
         self.repository = VerdictRepository(DATABASE_URL)
         self._loop = asyncio.get_event_loop()
 
@@ -1748,6 +1943,90 @@ class InferenceRuntime:
         if database_rows:
             return database_rows
         return self.latest_alerts(limit)
+
+    def find_verdict_by_session(self, session_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            for item in self._latest_verdicts:
+                if str(item.get("session_id")) == session_id:
+                    return dict(item)
+            for item in self._latest_alerts:
+                if str(item.get("session_id")) == session_id:
+                    return dict(item)
+        return self.repository.get_verdict_by_session(session_id)
+
+    def decision_for_session(self, session_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            cached = self._alert_decisions.get(session_id)
+        if cached is not None:
+            return cached
+        return self.repository.latest_decision_for_session(session_id)
+
+    def record_decision(
+        self,
+        session_id: str,
+        decision: str,
+        actor_id: str,
+        actor_roles: list[str],
+        notes: str | None,
+    ) -> dict[str, Any] | None:
+        verdict = self.find_verdict_by_session(session_id)
+        if verdict is None:
+            return None
+
+        status = DECISION_STATUS_BY_DECISION.get(decision, "triaged")
+        decided_at = datetime.now(timezone.utc)
+
+        training_label_written: str | None = None
+        if decision in TRAINING_LABEL_DECISIONS:
+            if decision == "false_positive":
+                label = "BENIGN"
+            else:
+                candidate_label = str(verdict.get("xgb_class") or "").strip().upper()
+                label = candidate_label if candidate_label in TRAINING_CLASS_NAMES else "OTHER"
+            features = _coerce_verdict_features_for_training(verdict)
+            written = self.repository.write_labeled_training_row(
+                session_id,
+                features,
+                label,
+                1.0,
+                label,
+                f"analyst_decision:{decision}",
+                {"decided_by": actor_id, "decision": decision},
+            )
+            if written:
+                training_label_written = label
+
+        self.repository.record_alert_decision(session_id, decision, status, actor_id, actor_roles, notes)
+        record = {
+            "session_id": session_id,
+            "decision": decision,
+            "status": status,
+            "decided_by": actor_id,
+            "decided_at": decided_at,
+            "training_label_written": training_label_written,
+        }
+        with self._lock:
+            self._alert_decisions[session_id] = record
+        try:
+            self.repository.record_audit_event(
+                _new_security_audit_event(
+                    "security.alert_decision",
+                    "succeeded",
+                    route="/api/alerts/{session_id}/decision",
+                    http_method="POST",
+                    actor_id=actor_id,
+                    actor_roles=actor_roles,
+                    resource_id=session_id,
+                    details={
+                        "decision": decision,
+                        "status": status,
+                        "training_label_written": training_label_written,
+                    },
+                )
+            )
+        except Exception as exc:
+            log.error("Security audit write failed for alert decision (%s)", type(exc).__name__)
+        return record
 
 
 runtime = InferenceRuntime()
@@ -2334,6 +2613,24 @@ def get_api_model_version() -> dict[str, Any]:
 @app.get("/api/v1/alerts", response_model=list[AlertResponse])
 def get_api_alerts() -> list[dict[str, Any]]:
     return _format_alert_payloads(runtime.list_alert_payloads(50))
+
+
+@app.post("/api/v1/alerts/{session_id}/decision", response_model=AlertDecisionResponse)
+def submit_alert_decision(session_id: str, payload: AlertDecisionRequest, request: Request) -> dict[str, Any]:
+    identity = getattr(request.state, "identity", None) or {}
+    actor_id = str(identity.get("username") or identity.get("user_id") or "anonymous-analyst")
+    actor_roles = list(identity.get("roles", []))
+    record = runtime.record_decision(session_id, payload.decision, actor_id, actor_roles, payload.notes)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Alert session not found.")
+    return {
+        "sessionId": record["session_id"],
+        "decision": record["decision"],
+        "status": record["status"],
+        "decidedBy": record["decided_by"],
+        "decidedAt": record["decided_at"],
+        "trainingLabelWritten": record.get("training_label_written"),
+    }
 
 
 @app.websocket("/api/v1/ws/alerts")

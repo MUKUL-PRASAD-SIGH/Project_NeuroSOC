@@ -233,6 +233,21 @@ export const useDashboardStore = create((set, get) => ({
     set({ alertStreamCleanup: null });
   },
 
+  applyAlertDecision: (sessionId, patch) => {
+    set((state) => ({
+      alerts: {
+        ...state.alerts,
+        items: state.alerts.items.map((item) =>
+          item.id === sessionId ? { ...item, ...patch } : item
+        ),
+      },
+      modal:
+        state.modal.selectedAlert?.id === sessionId
+          ? { ...state.modal, selectedAlert: { ...state.modal.selectedAlert, ...patch } }
+          : state.modal,
+    }));
+  },
+
   openUserModal: (alert) => {
     set({
       modal: {

@@ -118,6 +118,8 @@ def required_roles_for_route(path: str, method: str) -> frozenset[str]:
         return MODEL_ADMIN_ROLES
     if path in {"/ws/alerts", "/api/ws/alerts"}:
         return READ_ROLES
+    if method == "POST" and path.startswith("/api/alerts/") and path.endswith("/decision"):
+        return RESPONSE_ROLES
     if method in {"POST", "PUT", "PATCH", "DELETE"} and path in WRITE_ROUTES:
         return RESPONSE_ROLES
     if method in {"GET", "HEAD", "OPTIONS"}:

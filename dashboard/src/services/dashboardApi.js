@@ -76,6 +76,8 @@ function normalizeAlert(alert) {
     dimensions: Array.isArray(alert.dimensions) ? alert.dimensions : [],
     recentVerdicts: Array.isArray(alert.recentVerdicts) ? alert.recentVerdicts : [],
     modelVersion: alert.modelVersion || null,
+    status: alert.status || "new",
+    decision: alert.decision || null,
   };
 }
 
@@ -136,6 +138,24 @@ export async function getSandboxReplay(sessionId) {
     // Sessions that were never diverted have no replay.
     return null;
   }
+}
+
+export async function submitAlertDecision(sessionId, decision, notes) {
+  if (USE_MOCKS || !sessionId) {
+    return {
+      sessionId,
+      decision,
+      status: decision === "confirm_threat" || decision === "false_positive" ? "closed" : "triaged",
+      decidedBy: "mock-analyst",
+      decidedAt: new Date().toISOString(),
+      trainingLabelWritten: null,
+    };
+  }
+  const { data } = await apiClient.post(
+    `/api/v1/alerts/${encodeURIComponent(sessionId)}/decision`,
+    { decision, notes: notes || null }
+  );
+  return data;
 }
 
 export function subscribeToAlerts({ onMessage, onStatusChange, onError }) {

@@ -71,6 +71,11 @@ function AlertCard({ alert, onOpen }) {
             {verdictLabel[verdict] || verdict.replace(/_/g, " ")}
           </span>
           <span className="truncate text-sm font-medium text-soc-text">{alert.userName || alert.sourceIp}</span>
+          {alert.status && alert.status !== "new" ? (
+            <span className="shrink-0 rounded border border-soc-border/70 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.1em] text-soc-muted">
+              {alert.status}
+            </span>
+          ) : null}
         </div>
         <span className="soc-tabular shrink-0 font-mono text-[11px] text-soc-muted">{formatAlertTime(alert.timestamp)}</span>
       </div>

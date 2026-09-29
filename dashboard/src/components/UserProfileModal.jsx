@@ -6,8 +6,70 @@ import {
   RadarChart,
   ResponsiveContainer,
 } from "recharts";
-import { getSandboxReplay } from "../services/dashboardApi";
+import { getSandboxReplay, submitAlertDecision } from "../services/dashboardApi";
 import { useDashboardStore } from "../store/dashboardStore";
+
+const DECISION_OPTIONS = [
+  { value: "confirm_threat", label: "Confirm threat", tone: "border-soc-red/50 text-soc-red hover:bg-soc-red/10" },
+  { value: "false_positive", label: "False positive", tone: "border-soc-green/50 text-soc-green hover:bg-soc-green/10" },
+  { value: "restore_access", label: "Restore access", tone: "border-soc-amber/50 text-soc-amber hover:bg-soc-amber/10" },
+  { value: "escalate", label: "Escalate", tone: "border-soc-electric/50 text-soc-electric hover:bg-soc-electric/10" },
+];
+
+const statusLabel = {
+  new: "Awaiting review",
+  triaged: "Triaged",
+  closed: "Closed",
+};
+
+function DecisionPanel({ alert }) {
+  const applyAlertDecision = useDashboardStore((state) => state.applyAlertDecision);
+  const [pending, setPending] = useState(null);
+  const [error, setError] = useState(null);
+
+  async function handleDecision(decision) {
+    setPending(decision);
+    setError(null);
+    try {
+      const result = await submitAlertDecision(alert.id, decision);
+      applyAlertDecision(alert.id, { status: result.status, decision: result.decision });
+    } catch (err) {
+      setError(err?.response?.data?.detail || "Could not record this decision. Try again.");
+    } finally {
+      setPending(null);
+    }
+  }
+
+  return (
+    <section className="mt-5 rounded-lg border border-soc-border/80 bg-soc-panelSoft/40 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-medium text-soc-muted">Analyst decision</p>
+        <span className="rounded-full border border-soc-border/60 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-soc-muted">
+          {statusLabel[alert.status] || "Awaiting review"}
+        </span>
+      </div>
+      {alert.decision ? (
+        <p className="mt-2 text-xs text-soc-muted">
+          Last decision: <span className="text-soc-text">{alert.decision.replace(/_/g, " ")}</span>
+        </p>
+      ) : null}
+      <div className="mt-3 flex flex-wrap gap-2">
+        {DECISION_OPTIONS.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            disabled={pending !== null}
+            onClick={() => handleDecision(option.value)}
+            className={`rounded-md border px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 ${option.tone}`}
+          >
+            {pending === option.value ? "Saving…" : option.label}
+          </button>
+        ))}
+      </div>
+      {error ? <p className="mt-2 text-xs text-soc-red">{error}</p> : null}
+    </section>
+  );
+}
 
 const verdictTone = {
   HACKER: "text-soc-red",
@@ -350,6 +412,7 @@ export default function UserProfileModal() {
               </section>
             </div>
 
+            {verdict === "HACKER" ? <DecisionPanel alert={alert} /> : null}
             {verdict === "HACKER" ? <SandboxActivity sessionId={alert.id} /> : null}
           </>
         )}
