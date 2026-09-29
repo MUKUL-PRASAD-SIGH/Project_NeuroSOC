@@ -195,9 +195,21 @@ class PostgresFeedbackRepository:
         for row in rows:
             label = str(row["label"]).strip().upper()
             if label not in CLASS_NAMES:
+                log.warning(
+                    "Dropping feedback row id=%s session=%s: label %r is not a known class %s.",
+                    row.get("id"),
+                    row.get("session_id"),
+                    label,
+                    CLASS_NAMES,
+                )
                 continue
             vector = coerce_feature_vector(row.get("features"))
             if vector is None:
+                log.warning(
+                    "Dropping feedback row id=%s session=%s: features could not be parsed into an 80-value vector.",
+                    row.get("id"),
+                    row.get("session_id"),
+                )
                 continue
             samples.append(
                 FeedbackSample(

@@ -181,7 +181,7 @@ def count_login_attempts(actions: Sequence[dict[str, Any]]) -> tuple[int, int]:
 def detect_label(actions: Sequence[dict[str, Any]]) -> SessionLabel:
     if not actions:
         return SessionLabel(
-            label="HACKER",
+            label="OTHER",
             confidence=0.55,
             attack_type="UNKNOWN",
             reason="Empty sandbox session still indicates suspicious diversion.",
@@ -201,7 +201,7 @@ def detect_label(actions: Sequence[dict[str, Any]]) -> SessionLabel:
                 False,
             ):
                 return SessionLabel(
-                    "HACKER",
+                    "BOT",
                     0.91,
                     "HONEYPOT_ACCESS",
                     "A hidden honeypot field was populated during the sandbox session.",
@@ -209,7 +209,7 @@ def detect_label(actions: Sequence[dict[str, Any]]) -> SessionLabel:
             flattened_body = " ".join(iter_texts(body)).lower()
             if any(token_key in flattened_body for token_key in CANARY_KEYS):
                 return SessionLabel(
-                    "HACKER",
+                    "WEB_ATTACK",
                     0.9,
                     "CANARY_TOKEN",
                     "A canary token indicator appeared in the sandbox request payload.",
@@ -245,9 +245,9 @@ def detect_label(actions: Sequence[dict[str, Any]]) -> SessionLabel:
     for action in actions:
         path = str(action.get("path") or "").lower()
         if any(path.startswith(pattern) for pattern in HONEYPOT_PATH_PATTERNS):
-            return SessionLabel("HACKER", 0.90, "HONEYPOT_ACCESS", f"Honeypot endpoint accessed: {path}")
+            return SessionLabel("RECONNAISSANCE", 0.90, "HONEYPOT_ACCESS", f"Honeypot endpoint accessed: {path}")
 
-    return SessionLabel("HACKER", 0.62, "UNKNOWN", "Session was sandboxed and remained suspicious after review.")
+    return SessionLabel("OTHER", 0.62, "UNKNOWN", "Session was sandboxed and remained suspicious after review.")
 
 
 class FeedbackRepository:
