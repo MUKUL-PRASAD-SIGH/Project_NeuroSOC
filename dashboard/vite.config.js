@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { loadEnv } from "vite";
-import { assertMocksDisabledForBuild } from "../scripts/productionBuildGuard.mjs";
+import { assertMocksDisabledForBuild } from "./scripts/productionBuildGuard.mjs";
 
 export default defineConfig(({ command, mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
