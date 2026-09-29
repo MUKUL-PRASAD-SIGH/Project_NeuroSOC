@@ -116,6 +116,7 @@ services:
     networks: [neuroshield-net]
     ports:
       - "8080:8080"
+      - "5140:5140/udp"
     depends_on:
       kafka:
         condition: service_healthy
@@ -126,6 +127,7 @@ services:
       INGESTION_MODE: all
       INGESTION_SOURCE_ID: ${INGESTION_SOURCE_ID:-ingestion-service}
       DATA_DIR: /data/pcap
+      SYSLOG_PORT: "5140"
       KAFKA_PRODUCER_RETRIES: "10"
       KAFKA_PRODUCER_DELAY: "15"
       KAFKA_SETUP_RETRIES: "10"
