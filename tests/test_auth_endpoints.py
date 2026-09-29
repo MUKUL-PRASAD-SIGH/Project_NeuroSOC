@@ -479,8 +479,9 @@ def test_response_route_allows_operator(protected_client, monkeypatch):
 
 
 class FakeWebSocket:
-    def __init__(self, authorization: str):
+    def __init__(self, authorization: str, query_params: dict[str, str] | None = None):
         self.headers = {"authorization": authorization}
+        self.query_params = query_params or {}
         self.url = SimpleNamespace(path="/ws/alerts")
         self.state = SimpleNamespace()
         self.closed_with: tuple[int, str] | None = None
@@ -505,6 +506,16 @@ def test_alert_websocket_applies_role_policy(protected_client):
     ]
     assert [event["outcome"] for event in websocket_events] == ["succeeded", "denied"]
     assert websocket_events[-1]["actor_id"] == "test-user"
+
+
+def test_alert_websocket_accepts_token_via_query_param(protected_client):
+    # Browsers cannot set a custom header on a WebSocket handshake; the dashboard passes the
+    # token as ?access_token=... instead, and the backend must accept it as a fallback.
+    _ = protected_client
+    query_param_identity = FakeWebSocket("", query_params={"access_token": "operator"})
+
+    assert asyncio.run(inference_main._authorize_websocket(query_param_identity)) is True
+    assert query_param_identity.state.identity["roles"] == ["operator"]
 
 
 def test_simulated_response_action_is_audited_without_request_body(protected_client, monkeypatch):

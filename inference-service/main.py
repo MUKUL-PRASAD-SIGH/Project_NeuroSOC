@@ -2764,8 +2764,16 @@ async def _authorize_websocket(websocket: WebSocket) -> bool:
             await websocket.close(code=1011, reason="OIDC issuer is not configured")
             return False
         try:
+            # Browsers cannot set a custom Authorization header on a WebSocket handshake, so
+            # the dashboard passes the token as a query parameter instead; prefer a real header
+            # when a non-browser client does send one.
+            header_value = websocket.headers.get("authorization", "")
+            if not header_value:
+                query_token = websocket.query_params.get("access_token")
+                if query_token:
+                    header_value = f"Bearer {query_token}"
             websocket.state.identity = _authorize_bearer(
-                websocket.headers.get("authorization", ""),
+                header_value,
                 oidc,
                 path,
                 "WEBSOCKET",

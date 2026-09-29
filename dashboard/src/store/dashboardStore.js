@@ -10,6 +10,7 @@ import {
   rollbackModel,
   subscribeToAlerts,
 } from "../services/dashboardApi";
+import { loadCurrentUser, rolesFromUser, signIn as oidcSignIn, signOut as oidcSignOut } from "../lib/auth";
 
 const initialStats = {
   totalTransactions: 0,
@@ -83,6 +84,33 @@ export const useDashboardStore = create((set, get) => ({
     open: false,
   },
   alertStreamCleanup: null,
+  auth: {
+    user: null,
+    roles: [],
+    isAuthenticated: false,
+    checked: false,
+  },
+
+  refreshAuth: async () => {
+    const user = await loadCurrentUser();
+    set({
+      auth: {
+        user,
+        roles: rolesFromUser(user),
+        isAuthenticated: Boolean(user && !user.expired),
+        checked: true,
+      },
+    });
+    return user;
+  },
+
+  signIn: async () => {
+    await oidcSignIn();
+  },
+
+  signOut: async () => {
+    await oidcSignOut();
+  },
 
   fetchStats: async () => {
     set((state) => ({

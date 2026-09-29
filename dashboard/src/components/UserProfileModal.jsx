@@ -6,8 +6,11 @@ import {
   RadarChart,
   ResponsiveContainer,
 } from "recharts";
+import { OIDC_REQUIRED } from "../lib/auth";
 import { getSandboxReplay, submitAlertDecision } from "../services/dashboardApi";
 import { useDashboardStore } from "../store/dashboardStore";
+
+const RESPONSE_ROLES = new Set(["operator", "admin"]);
 
 const DECISION_OPTIONS = [
   { value: "confirm_threat", label: "Confirm threat", tone: "border-soc-red/50 text-soc-red hover:bg-soc-red/10" },
@@ -24,6 +27,8 @@ const statusLabel = {
 
 function DecisionPanel({ alert }) {
   const applyAlertDecision = useDashboardStore((state) => state.applyAlertDecision);
+  const { roles } = useDashboardStore((state) => state.auth);
+  const canDecide = !OIDC_REQUIRED || roles.some((role) => RESPONSE_ROLES.has(role));
   const [pending, setPending] = useState(null);
   const [error, setError] = useState(null);
 
@@ -53,19 +58,23 @@ function DecisionPanel({ alert }) {
           Last decision: <span className="text-soc-text">{alert.decision.replace(/_/g, " ")}</span>
         </p>
       ) : null}
-      <div className="mt-3 flex flex-wrap gap-2">
-        {DECISION_OPTIONS.map((option) => (
-          <button
-            key={option.value}
-            type="button"
-            disabled={pending !== null}
-            onClick={() => handleDecision(option.value)}
-            className={`rounded-md border px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 ${option.tone}`}
-          >
-            {pending === option.value ? "Saving…" : option.label}
-          </button>
-        ))}
-      </div>
+      {canDecide ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {DECISION_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              disabled={pending !== null}
+              onClick={() => handleDecision(option.value)}
+              className={`rounded-md border px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 ${option.tone}`}
+            >
+              {pending === option.value ? "Saving…" : option.label}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-3 text-xs text-soc-muted">Sign in with an operator or admin role to record a decision.</p>
+      )}
       {error ? <p className="mt-2 text-xs text-soc-red">{error}</p> : null}
     </section>
   );

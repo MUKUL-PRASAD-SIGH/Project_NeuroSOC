@@ -1,4 +1,5 @@
 import { apiClient, buildWsUrl, getApiBaseUrl } from "../lib/apiClient";
+import { getAccessToken } from "../lib/auth";
 import {
   createMockAlert,
   mockAlerts,
@@ -200,14 +201,20 @@ export function subscribeToAlerts({ onMessage, onStatusChange, onError }) {
     stopMockStream = startMockAlertStream({ onMessage, onStatusChange });
   };
 
-  const connect = () => {
+  const connect = async () => {
     if (isClosed || stopMockStream) {
       return;
     }
 
     onStatusChange?.("connecting");
 
-    socket = new WebSocket(buildWsUrl("/api/v1/ws/alerts"));
+    const token = await getAccessToken();
+    const wsUrl = buildWsUrl("/api/v1/ws/alerts");
+    socket = new WebSocket(token ? `${wsUrl}?access_token=${encodeURIComponent(token)}` : wsUrl);
+    if (isClosed) {
+      socket.close();
+      return;
+    }
 
     socket.onopen = () => {
       onStatusChange?.("connected");

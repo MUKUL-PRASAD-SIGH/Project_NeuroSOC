@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { OIDC_REQUIRED } from "../lib/auth";
 import { useDashboardStore } from "../store/dashboardStore";
 
 const statusTone = {
@@ -13,6 +14,8 @@ export default function ModelCandidatesPanel() {
   const promoteCandidate = useDashboardStore((state) => state.promoteCandidate);
   const rejectCandidate = useDashboardStore((state) => state.rejectCandidate);
   const rollbackActiveModel = useDashboardStore((state) => state.rollbackActiveModel);
+  const { roles } = useDashboardStore((state) => state.auth);
+  const canManageModels = !OIDC_REQUIRED || roles.includes("admin");
   const [busyId, setBusyId] = useState(null);
   const [actionError, setActionError] = useState(null);
 
@@ -41,14 +44,16 @@ export default function ModelCandidatesPanel() {
           <h2 className="soc-section-title">Model candidates</h2>
           <p className="mt-0.5 text-xs text-soc-muted">Review a retrained candidate, promote it live, or roll back.</p>
         </div>
-        <button
-          type="button"
-          disabled={busyId !== null}
-          onClick={() => runAction("rollback", rollbackActiveModel)}
-          className="rounded-md border border-soc-amber/50 px-3 py-1.5 text-xs font-medium text-soc-amber transition hover:bg-soc-amber/10 disabled:opacity-50"
-        >
-          {busyId === "rollback" ? "Rolling back…" : "Rollback to previous"}
-        </button>
+        {canManageModels ? (
+          <button
+            type="button"
+            disabled={busyId !== null}
+            onClick={() => runAction("rollback", rollbackActiveModel)}
+            className="rounded-md border border-soc-amber/50 px-3 py-1.5 text-xs font-medium text-soc-amber transition hover:bg-soc-amber/10 disabled:opacity-50"
+          >
+            {busyId === "rollback" ? "Rolling back…" : "Rollback to previous"}
+          </button>
+        ) : null}
       </div>
 
       {error ? <p className="mt-3 text-sm text-soc-red">{error}</p> : null}
@@ -84,24 +89,26 @@ export default function ModelCandidatesPanel() {
                   {candidate.status.replace(/_/g, " ")}
                 </span>
               </div>
-              <div className="mt-3 flex gap-2">
-                <button
-                  type="button"
-                  disabled={busyId !== null}
-                  onClick={() => runAction(candidate.candidateId, () => promoteCandidate(candidate.candidateId))}
-                  className="rounded-md border border-soc-green/50 px-3 py-1.5 text-xs font-medium text-soc-green transition hover:bg-soc-green/10 disabled:opacity-50"
-                >
-                  {busyId === candidate.candidateId ? "Working…" : "Promote"}
-                </button>
-                <button
-                  type="button"
-                  disabled={busyId !== null}
-                  onClick={() => runAction(candidate.candidateId, () => rejectCandidate(candidate.candidateId))}
-                  className="rounded-md border border-soc-border/70 px-3 py-1.5 text-xs font-medium text-soc-muted transition hover:bg-soc-panelSoft disabled:opacity-50"
-                >
-                  Reject
-                </button>
-              </div>
+              {canManageModels ? (
+                <div className="mt-3 flex gap-2">
+                  <button
+                    type="button"
+                    disabled={busyId !== null}
+                    onClick={() => runAction(candidate.candidateId, () => promoteCandidate(candidate.candidateId))}
+                    className="rounded-md border border-soc-green/50 px-3 py-1.5 text-xs font-medium text-soc-green transition hover:bg-soc-green/10 disabled:opacity-50"
+                  >
+                    {busyId === candidate.candidateId ? "Working…" : "Promote"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busyId !== null}
+                    onClick={() => runAction(candidate.candidateId, () => rejectCandidate(candidate.candidateId))}
+                    className="rounded-md border border-soc-border/70 px-3 py-1.5 text-xs font-medium text-soc-muted transition hover:bg-soc-panelSoft disabled:opacity-50"
+                  >
+                    Reject
+                  </button>
+                </div>
+              ) : null}
             </article>
           ))
         )}

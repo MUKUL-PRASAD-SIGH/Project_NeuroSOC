@@ -6,6 +6,7 @@ const DashboardPage = lazy(() => import("./pages/Dashboard"));
 const IntelFeedPage = lazy(() => import("./pages/IntelFeed"));
 const ResponseOpsPage = lazy(() => import("./pages/ResponseOps"));
 const NotFoundPage = lazy(() => import("./pages/NotFound"));
+const AuthCallbackPage = lazy(() => import("./pages/AuthCallback"));
 
 function LazyPage({ children }) {
   return (
@@ -16,6 +17,14 @@ function LazyPage({ children }) {
 }
 
 const router = createBrowserRouter([
+  {
+    path: "/callback",
+    element: (
+      <LazyPage>
+        <AuthCallbackPage />
+      </LazyPage>
+    ),
+  },
   {
     path: "/",
     element: <AppShell />,
