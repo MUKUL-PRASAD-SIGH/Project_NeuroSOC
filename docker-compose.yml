@@ -69,7 +69,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-neuroshield}
       POSTGRES_USER: ${POSTGRES_USER:-ns_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ns_pass}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your .env file (see .env.example)}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -91,7 +91,7 @@ services:
       - ./identity/realm-export.json:/opt/keycloak/data/import/neurosoc-realm.json:ro
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
-      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-change-me-local-only}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD in your .env file (see .env.example)}
     restart: unless-stopped
 
   redis:
@@ -173,7 +173,7 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-local}
       KAFKA_BOOTSTRAP: kafka:9092
-      DATABASE_URL: ${DATABASE_URL:-postgresql://ns_user:ns_pass@postgres:5432/neuroshield}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in your .env file (see .env.example)}
       REDIS_URL: redis://redis:6379
       MODEL_PATH: /models
       FEATURE_COLUMNS_PATH: /data/feature_columns.txt
@@ -218,7 +218,7 @@ services:
     pids_limit: 128
     environment:
       KAFKA_BOOTSTRAP: kafka:9092
-      DATABASE_URL: ${DATABASE_URL:-postgresql://ns_user:ns_pass@postgres:5432/neuroshield}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in your .env file (see .env.example)}
       SANDBOX_TIMEOUT_SEC: "300"
       SANDBOX_SERVICE_TOKEN: ${SANDBOX_SERVICE_TOKEN:-}
     restart: unless-stopped
@@ -237,7 +237,7 @@ services:
       - ./data:/data
     environment:
       KAFKA_BOOTSTRAP: kafka:9092
-      DATABASE_URL: ${DATABASE_URL:-postgresql://ns_user:ns_pass@postgres:5432/neuroshield}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in your .env file (see .env.example)}
       POLL_INTERVAL_SECONDS: "30"
     restart: unless-stopped
 
@@ -259,7 +259,7 @@ services:
       - ./models/candidates:/models/candidates
     environment:
       KAFKA_BOOTSTRAP: kafka:9092
-      DATABASE_URL: ${DATABASE_URL:-postgresql://ns_user:ns_pass@postgres:5432/neuroshield}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in your .env file (see .env.example)}
       RETRAIN_MIN_FEEDBACK_SAMPLES: "3"
       RETRAIN_INTERVAL_SECONDS: "30"
       MODEL_VERSION_FILE: /models/model_version.json
@@ -328,6 +328,6 @@ services:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
       - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/neurosoc-dashboards
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-neuroshield_admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in your .env file (see .env.example)}
       GF_USERS_ALLOW_SIGN_UP: "false"
     restart: unless-stopped

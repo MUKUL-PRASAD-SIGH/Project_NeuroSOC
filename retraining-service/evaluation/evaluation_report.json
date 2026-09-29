@@ -1,0 +1,150 @@
+{
+  "generated_at": "2026-09-29T20:21:25.494121+00:00",
+  "evidence_type": "synthetic_development_only",
+  "note": "Evaluated against a fixed, seeded synthetic held-out set (retraining-service/results/holdout_eval.json), not a public IDS dataset. Not evidence of real-world detection performance. The active model's own training data predates this benchmark and is not known to share its distribution, so a low score here reflects an out-of-distribution transfer gap, not necessarily the model's real-world behavior -- see PRODUCTION_BUILD_PLAN.md T032-T037 for what a trustworthy evaluation needs.",
+  "model_version": "1.0.1",
+  "dataset_hash": "daf06360cdf72a516ed86b0513ee93b9322e741c97e31465192c4efa3eb92b95",
+  "holdout_size": 280,
+  "class_report": {
+    "BENIGN": {
+      "precision": 0.14285714285714285,
+      "recall": 1.0,
+      "f1-score": 0.25,
+      "support": 40.0
+    },
+    "DDOS": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1-score": 0.0,
+      "support": 40.0
+    },
+    "BRUTE_FORCE": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1-score": 0.0,
+      "support": 40.0
+    },
+    "RECONNAISSANCE": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1-score": 0.0,
+      "support": 40.0
+    },
+    "WEB_ATTACK": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1-score": 0.0,
+      "support": 40.0
+    },
+    "BOT": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1-score": 0.0,
+      "support": 40.0
+    },
+    "OTHER": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1-score": 0.0,
+      "support": 40.0
+    },
+    "accuracy": 0.14285714285714285,
+    "macro avg": {
+      "precision": 0.02040816326530612,
+      "recall": 0.14285714285714285,
+      "f1-score": 0.03571428571428571,
+      "support": 280.0
+    },
+    "weighted avg": {
+      "precision": 0.02040816326530612,
+      "recall": 0.14285714285714285,
+      "f1-score": 0.03571428571428571,
+      "support": 280.0
+    }
+  },
+  "confusion_matrix": {
+    "labels": [
+      "BENIGN",
+      "DDOS",
+      "BRUTE_FORCE",
+      "RECONNAISSANCE",
+      "WEB_ATTACK",
+      "BOT",
+      "OTHER"
+    ],
+    "matrix": [
+      [
+        40,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        40,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        40,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        40,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        40,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        40,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        40,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    ]
+  },
+  "false_positive_rate_by_class": {
+    "BENIGN": 1.0,
+    "DDOS": 0.0,
+    "BRUTE_FORCE": 0.0,
+    "RECONNAISSANCE": 0.0,
+    "WEB_ATTACK": 0.0,
+    "BOT": 0.0,
+    "OTHER": 0.0
+  }
+}
