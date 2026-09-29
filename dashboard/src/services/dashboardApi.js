@@ -125,6 +125,19 @@ export async function getAlerts() {
   );
 }
 
+export async function getSandboxReplay(sessionId) {
+  if (USE_MOCKS || !sessionId) {
+    return null;
+  }
+  try {
+    const { data } = await apiClient.get(`/api/v1/sandbox/${encodeURIComponent(sessionId)}/replay`);
+    return data;
+  } catch {
+    // Sessions that were never diverted have no replay.
+    return null;
+  }
+}
+
 export function subscribeToAlerts({ onMessage, onStatusChange, onError }) {
   if (USE_MOCKS || (preferMockData && isDevelopmentMockFallbackEnabled())) {
     return startMockAlertStream({ onMessage, onStatusChange });

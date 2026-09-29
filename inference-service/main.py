@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import ipaddress
 import logging
@@ -194,6 +195,7 @@ TRUSTED_PROXY_IPS = _parse_trusted_proxy_ips(os.getenv("TRUSTED_PROXY_IPS", "127
 MAX_REQUEST_BODY_BYTES = _read_positive_int_env("API_MAX_REQUEST_BODY_BYTES", "1048576")
 API_RATE_LIMIT_PER_MINUTE = _read_positive_int_env("API_RATE_LIMIT_PER_MINUTE", "120")
 SANDBOX_BASE_URL = os.getenv("SANDBOX_BASE_URL", "").rstrip("/")
+IPINFO_TOKEN = os.getenv("IPINFO_TOKEN", "").strip()
 SANDBOX_TIMEOUT_SECONDS = int(os.getenv("SANDBOX_TIMEOUT_SEC", "300"))
 PORTAL_SESSION_TTL_SECONDS = int(os.getenv("PORTAL_SESSION_TTL_SECONDS", "1800"))
 APP_STARTED_AT = time.time()
@@ -687,6 +689,7 @@ class PortalSession:
     latest_verdict: dict[str, Any] | None = None
     sandbox_token: str | None = None
     sandbox_mode: str | None = None
+    sandbox_started_at: float | None = None
 
     def touch(self) -> None:
         self.last_seen = time.time()
@@ -840,6 +843,7 @@ class PortalState:
                 return
             session.sandbox_token = sandbox_token
             session.sandbox_mode = mode
+            session.sandbox_started_at = session.sandbox_started_at or time.time()
             session.touch()
 
     def get_session(self, identifier: str | None = None, session_id: str | None = None) -> PortalSession | None:
@@ -866,6 +870,19 @@ class PortalState:
             if session is None:
                 return []
             actions: list[dict[str, Any]] = []
+            if session.sandbox_started_at is not None:
+                actions.append(
+                    {
+                        "path": "/api/bank/login",
+                        "method": "POST",
+                        "timestamp": session.sandbox_started_at,
+                        "body": {
+                            "event": "diverted_to_sandbox",
+                            "failed_logins": session.failed_logins,
+                            "distinct_passwords": len(session.login_passwords),
+                        },
+                    }
+                )
             for hit in session.honeypot_hits:
                 actions.append(
                     {
@@ -1261,6 +1278,54 @@ def _display_name_for_user(user_id: str) -> str:
     return account["display_name"] if account else user_id.replace("_", " ").title()
 
 
+_LOCATION_LABELS: OrderedDict[str, str] = OrderedDict()
+_LOCATION_LABELS_LIMIT = 2048
+
+
+def _fallback_location_label(ip: str) -> str:
+    if ip.startswith("185.220."):
+        return "TOR exit node"
+    return f"External · {ip}"
+
+
+def _location_label_for_ip(source_ip: str | None) -> str:
+    """Resolve a readable origin for an alert, using IPinfo when a token is configured."""
+    ip = str(source_ip or "").strip()
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return "Unknown location"
+    if address.is_private or address.is_loopback or address.is_link_local:
+        return "Internal network"
+    if ip in _LOCATION_LABELS:
+        return _LOCATION_LABELS[ip]
+
+    label = _fallback_location_label(ip)
+    if IPINFO_TOKEN:
+        try:
+            lookup = urllib_request.Request(
+                f"https://ipinfo.io/{ip}/json",
+                headers={"Authorization": f"Bearer {IPINFO_TOKEN}", "Accept": "application/json"},
+            )
+            with urllib_request.urlopen(lookup, timeout=2.0) as reply:
+                info = json.loads(reply.read().decode("utf-8"))
+            place = ", ".join(part for part in (info.get("city"), info.get("country")) if part)
+            privacy = info.get("privacy") or {}
+            if privacy.get("tor"):
+                place = f"{place} · TOR exit" if place else "TOR exit node"
+            elif privacy.get("vpn") or privacy.get("proxy"):
+                place = f"{place} · anonymizing proxy" if place else "Anonymizing proxy"
+            if place:
+                label = place
+        except (urllib_error.URLError, TimeoutError, ValueError, OSError) as exc:
+            log.warning("IPinfo lookup failed for %s: %s", ip, exc)
+
+    _LOCATION_LABELS[ip] = label
+    while len(_LOCATION_LABELS) > _LOCATION_LABELS_LIMIT:
+        _LOCATION_LABELS.popitem(last=False)
+    return label
+
+
 def _severity_for_verdict(verdict: str, confidence: float) -> str:
     if verdict == "HACKER" or confidence >= 0.8:
         return "high"
@@ -1334,7 +1399,7 @@ def _format_alert_payload(
         "sourceIp": verdict.get("source_ip", "unknown"),
         "userId": user_id,
         "userName": _display_name_for_user(user_id),
-        "locationLabel": verdict.get("location_label", "Unknown location"),
+        "locationLabel": verdict.get("location_label") or _location_label_for_ip(verdict.get("source_ip")),
         "score": float(verdict.get("confidence", 0.0)),
         "dimensions": _dimensions_from_profile(user_id),
         "recentVerdicts": (
@@ -1375,7 +1440,7 @@ def _camelize_verdict(verdict: dict[str, Any]) -> dict[str, Any]:
                 "active": bool(session and session.sandbox_token),
                 "mode": session.sandbox_mode if session else None,
                 "sandboxToken": session.sandbox_token if session else None,
-                "sandboxPath": "/security-alert" if session and session.sandbox_token else None,
+                "sandboxPath": "/dashboard" if session and session.sandbox_token else None,
             }
             if session is not None
             else None
@@ -1953,7 +2018,23 @@ def _session_snapshot(identifier: str, session_id: str | None, source_ip: str) -
     return portal_state.bind_aliases(identifier, session_id, [identifier])
 
 
+def _decoy_account(user_id: str, account: dict[str, Any] | None) -> dict[str, Any]:
+    """Stable, believable decoy balance for a sandboxed session; never the real one."""
+    digest = hashlib.sha256(f"decoy:{user_id}".encode("utf-8")).digest()
+    balance = 48_000 + int.from_bytes(digest[:3], "big") % 140_000 + (digest[3] % 100) / 100
+    masked = account["account_masked"] if account else f"****{int.from_bytes(digest[4:6], 'big') % 10000:04d}"
+    return {"balance": round(balance, 2), "accountMasked": masked}
+
+
 def _activate_sandbox(response: Response, session: PortalSession, user_id: str, source_ip: str) -> dict[str, Any]:
+    if session.sandbox_token:
+        # Already diverted: keep the attacker in the same decoy session.
+        return {
+            "active": True,
+            "mode": session.sandbox_mode or "placeholder",
+            "sandboxToken": session.sandbox_token,
+            "sandboxPath": "/dashboard",
+        }
     mode = "placeholder"
     sandbox_token = f"sbx-placeholder-{uuid.uuid4().hex[:12]}"
     if sandbox_gateway is not None:
@@ -1976,7 +2057,7 @@ def _activate_sandbox(response: Response, session: PortalSession, user_id: str, 
         "active": True,
         "mode": mode,
         "sandboxToken": sandbox_token,
-        "sandboxPath": "/security-alert",
+        "sandboxPath": "/dashboard",
     }
 
 
@@ -2356,14 +2437,17 @@ def bank_login(request: BankLoginRequest, response: Response) -> dict[str, Any]:
         "verdict": verdict.verdict,
         "confidence": verdict.confidence,
         "sandbox": sandbox,
-        "next": "/security-alert" if sandbox else ("/dashboard" if authenticated else "/login"),
+        # A diverted session is shown the normal account page backed by decoy data.
+        "next": "/dashboard" if (sandbox or authenticated) else "/login",
     }
-    if account:
+    if sandbox:
+        payload["account"] = _decoy_account(user_id, account)
+    elif account and authenticated:
         payload["account"] = {
             "balance": account["balance"],
             "accountMasked": account["account_masked"],
         }
-    if not authenticated:
+    if not authenticated and not sandbox:
         payload["error"] = "Invalid credentials."
     return payload
 
@@ -2385,8 +2469,8 @@ def bank_transfer(request: BankTransferRequest, response: Response) -> dict[str,
     status = "accepted"
     message = "Transfer authorized"
     if sandbox:
-        status = "sandboxed"
-        message = "Transfer diverted into sandbox review."
+        # The decoy vault confirms the transfer; nothing leaves the sandbox.
+        status = "accepted"
     elif verdict.verdict != "LEGITIMATE" or request.amount >= 10000:
         status = "suspicious"
         message = "Transfer pending manual review."
@@ -2434,16 +2518,22 @@ def get_sandbox_replay(session_id: str) -> dict[str, Any]:
     session = portal_state.get_session(session_id=session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Sandbox session not found.")
+    actions = portal_state.replay_stub(session_id)
     if session.sandbox_token and sandbox_gateway is not None and session.sandbox_mode == "live":
+        # Merge requests captured by the sandbox service with actions taken through the portal decoy.
         try:
-            return sandbox_gateway.replay(session.sandbox_token)
-        except RuntimeError as exc:
+            live = sandbox_gateway.replay(session.sandbox_token)
+            actions = sorted(
+                [*actions, *(live.get("actions") or [])],
+                key=lambda item: float(item.get("timestamp") or 0.0),
+            )
+        except (RuntimeError, TypeError, ValueError) as exc:
             log.warning("%s", exc)
     return {
         "session_id": session_id,
         "sandbox_token": session.sandbox_token,
         "mode": session.sandbox_mode or "placeholder",
-        "actions": portal_state.replay_stub(session_id),
+        "actions": actions,
     }
 
 

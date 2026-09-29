@@ -14,6 +14,13 @@ export interface PortalSandbox {
   sandboxPath?: string;
 }
 
+export interface PortalTransfer {
+  id: string;
+  date: string;
+  description: string;
+  amount: number;
+}
+
 export interface PortalUserSession {
   sessionId: string;
   userId?: string;
@@ -24,6 +31,7 @@ export interface PortalUserSession {
   confidence?: number;
   account?: PortalAccount;
   sandbox?: PortalSandbox | null;
+  recentTransfers?: PortalTransfer[];
 }
 
 const STORAGE_KEY = 'novatrust.portal.session';

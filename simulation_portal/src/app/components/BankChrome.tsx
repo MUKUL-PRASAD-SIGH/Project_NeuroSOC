@@ -22,12 +22,6 @@ export function BankHeader({ showSignIn = true }: { showSignIn?: boolean }) {
         </nav>
 
         <div className="flex items-center gap-2">
-          <Link
-            to="/system-flow"
-            className="hidden rounded-md px-3 py-2 text-sm text-slate-600 transition-colors hover:text-[#0b2545] md:inline-block"
-          >
-            Security demo
-          </Link>
           {showSignIn ? (
             <Link
               to="/login"
@@ -46,7 +40,7 @@ export function BankFooter() {
   return (
     <footer className="border-t border-slate-200">
       <div className="mx-auto flex max-w-6xl flex-col gap-3 px-6 py-8 text-xs text-slate-500 md:flex-row md:items-center md:justify-between">
-        <p>© NovaTrust — demonstration bank for the NeuroSOC project. Not a real financial institution.</p>
+        <p>© 2026 NovaTrust Bank. All rights reserved.</p>
         <div className="flex gap-5">
           <a href="#" className="hover:text-slate-700">Privacy</a>
           <a href="#" className="hover:text-slate-700">Terms</a>

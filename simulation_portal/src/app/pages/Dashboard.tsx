@@ -1,11 +1,37 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { motion } from 'motion/react';
 import { clearPortalSession, readPortalSession, setDebugToken } from '../../lib/portalSession';
 import { useBehavioralTracker } from '../../hooks/useBehavioralTracker';
 import { getMockDashboardData } from '../../lib/portalMock';
 
 const CANARY_TOKEN = 'NT_CANARY_7f8e9d2a1b3c4e5f6g7h8i9j0k';
 const INTERNAL_EXPORT_ENDPOINT = '/api/internal/user-export';
+
+function useCountUp(target: number, durationMs = 1400) {
+  const [value, setValue] = useState(0);
+  useEffect(() => {
+    let frame = 0;
+    const started = performance.now();
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - started) / durationMs);
+      setValue(target * (1 - Math.pow(1 - progress, 3)));
+      if (progress < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [target, durationMs]);
+  return value;
+}
+
+const rise = {
+  hidden: { opacity: 0, y: 14 },
+  show: (index: number) => ({
+    opacity: 1,
+    y: 0,
+    transition: { delay: 0.12 + index * 0.08, duration: 0.5, ease: [0.16, 1, 0.3, 1] as const },
+  }),
+};
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -17,24 +43,31 @@ export default function Dashboard() {
   });
   const dashboardData = getMockDashboardData(session.userId || session.email);
   const displayName = session.displayName || dashboardData.displayName;
-  const balance = session.account?.balance ?? dashboardData.account.balance;
+  const recentTransfers = session.recentTransfers || [];
+  const sentTotal = recentTransfers.reduce((sum, transfer) => sum + transfer.amount, 0);
+  const balance = (session.account?.balance ?? dashboardData.account.balance) - sentTotal;
+  const animatedBalance = useCountUp(balance);
   const accountMasked = session.account?.accountMasked || dashboardData.account.accountMasked;
-  const transactions = dashboardData.transactions.map((transaction) => ({
-    id: transaction.id,
-    date: transaction.date,
-    description: transaction.merchant,
-    amount: transaction.amount,
-    type: transaction.type === 'CREDIT' ? 'credit' : 'debit',
-  }));
+  const transactions = [
+    ...recentTransfers.map((transfer) => ({
+      id: transfer.id,
+      date: transfer.date,
+      description: transfer.description,
+      amount: -transfer.amount,
+      type: 'debit',
+    })),
+    ...dashboardData.transactions.map((transaction) => ({
+      id: transaction.id,
+      date: transaction.date,
+      description: transaction.merchant,
+      amount: transaction.amount,
+      type: transaction.type === 'CREDIT' ? 'credit' : 'debit',
+    })),
+  ];
 
   useEffect(() => {
     if (!session.userId || !session.authenticated) {
       navigate('/login', { replace: true });
-      return;
-    }
-
-    if (session.sandbox?.active || session.verdict === 'HACKER') {
-      navigate('/security-alert', { replace: true });
       return;
     }
 
@@ -47,9 +80,7 @@ export default function Dashboard() {
   }, [
     navigate,
     session.authenticated,
-    session.sandbox?.active,
     session.userId,
-    session.verdict,
     tracker.startTracking,
     tracker.stopTracking,
   ]);
@@ -80,11 +111,6 @@ export default function Dashboard() {
                 Transfer
               </button>
             </Link>
-            <Link to="/system-flow">
-              <button className="text-[#002147] px-4 py-2 hover:bg-gray-100 rounded transition-colors font-['Inter']">
-                System Flow
-              </button>
-            </Link>
             <button
               onClick={handleLogout}
               className="text-gray-600 px-4 py-2 hover:bg-gray-100 rounded transition-colors font-['Inter']"
@@ -97,15 +123,21 @@ export default function Dashboard() {
 
       <div className="max-w-7xl mx-auto px-6 py-8">
         {/* Welcome */}
-        <div className="mb-8">
+        <motion.div className="mb-8" variants={rise} initial="hidden" animate="show" custom={0}>
           <h2 className="font-['Playfair_Display'] text-3xl text-[#002147] font-bold mb-2">
             Welcome back, {displayName.split(' ')[0]}
           </h2>
           <p className="text-gray-600 font-['Inter']">Here's your account summary</p>
-        </div>
+        </motion.div>
 
         {/* Account Balance Card */}
-        <div className="bg-gradient-to-r from-[#002147] to-[#003366] rounded-lg p-8 mb-8 text-white">
+        <motion.div
+          className="bg-gradient-to-r from-[#002147] to-[#003366] rounded-lg p-8 mb-8 text-white"
+          variants={rise}
+          initial="hidden"
+          animate="show"
+          custom={1}
+        >
           <div className="mb-4">
             <p className="text-sm opacity-90 font-['Inter']">Checking Account</p>
             <p className="text-xs opacity-75 font-['Inter'] mt-1">{accountMasked}</p>
@@ -113,13 +145,19 @@ export default function Dashboard() {
           <div>
             <p className="text-sm opacity-90 mb-2 font-['Inter']">Available Balance</p>
             <p className="font-['Playfair_Display'] text-5xl font-bold">
-              ${balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              ${animatedBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </p>
           </div>
-        </div>
+        </motion.div>
 
         {/* Quick Actions */}
-        <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4 mb-8">
+        <motion.div
+          className="grid md:grid-cols-2 xl:grid-cols-4 gap-4 mb-8"
+          variants={rise}
+          initial="hidden"
+          animate="show"
+          custom={2}
+        >
           <Link to="/transfer">
             <button className="w-full bg-white p-6 rounded-lg shadow-sm hover:shadow-md transition-shadow text-left">
               <div className="w-12 h-12 bg-[#002147] rounded-lg mb-4 flex items-center justify-center">
@@ -132,17 +170,15 @@ export default function Dashboard() {
             </button>
           </Link>
 
-          <Link to="/system-flow">
-            <button className="w-full bg-white p-6 rounded-lg shadow-sm hover:shadow-md transition-shadow text-left">
-              <div className="w-12 h-12 bg-[#002147] rounded-lg mb-4 flex items-center justify-center">
-                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7h16M4 12h16M4 17h10" />
-                </svg>
-              </div>
-              <h3 className="font-['Inter'] font-semibold text-[#002147] mb-1">System Flow</h3>
-              <p className="text-sm text-gray-600 font-['Inter']">Run the live ingestion and verdict scripts</p>
-            </button>
-          </Link>
+          <button className="w-full bg-white p-6 rounded-lg shadow-sm hover:shadow-md transition-shadow text-left">
+            <div className="w-12 h-12 bg-[#002147] rounded-lg mb-4 flex items-center justify-center">
+              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+              </svg>
+            </div>
+            <h3 className="font-['Inter'] font-semibold text-[#002147] mb-1">Cards</h3>
+            <p className="text-sm text-gray-600 font-['Inter']">Manage debit and credit cards</p>
+          </button>
 
           <button className="w-full bg-white p-6 rounded-lg shadow-sm hover:shadow-md transition-shadow text-left">
             <div className="w-12 h-12 bg-[#002147] rounded-lg mb-4 flex items-center justify-center">
@@ -164,18 +200,25 @@ export default function Dashboard() {
             <h3 className="font-['Inter'] font-semibold text-[#002147] mb-1">Settings</h3>
             <p className="text-sm text-gray-600 font-['Inter']">Manage your account</p>
           </button>
-        </div>
+        </motion.div>
 
         {/* Recent Transactions */}
-        <div className="bg-white rounded-lg shadow-sm">
+        <motion.div className="bg-white rounded-lg shadow-sm" variants={rise} initial="hidden" animate="show" custom={3}>
           <div className="p-6 border-b border-gray-200">
             <h3 className="font-['Playfair_Display'] text-2xl text-[#002147] font-bold">
               Recent Transactions
             </h3>
           </div>
           <div className="divide-y divide-gray-200">
-            {transactions.map((transaction) => (
-              <div key={transaction.id} className="p-6 flex items-center justify-between hover:bg-gray-50 transition-colors">
+            {transactions.map((transaction, index) => (
+              <motion.div
+                key={transaction.id}
+                className="p-6 flex items-center justify-between hover:bg-gray-50 transition-colors"
+                variants={rise}
+                initial="hidden"
+                animate="show"
+                custom={4 + index}
+              >
                 <div className="flex items-center gap-4">
                   <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
                     transaction.type === 'credit' ? 'bg-green-100' : 'bg-gray-100'
@@ -201,10 +244,10 @@ export default function Dashboard() {
                   {transaction.type === 'credit' ? '+' : '-'}$
                   {Math.abs(transaction.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </p>
-              </div>
+              </motion.div>
             ))}
           </div>
-        </div>
+        </motion.div>
       </div>
     </div>
   );

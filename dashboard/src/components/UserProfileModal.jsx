@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   PolarAngleAxis,
   PolarGrid,
@@ -6,6 +6,7 @@ import {
   RadarChart,
   ResponsiveContainer,
 } from "recharts";
+import { getSandboxReplay } from "../services/dashboardApi";
 import { useDashboardStore } from "../store/dashboardStore";
 
 const verdictTone = {
@@ -141,6 +142,95 @@ function VerdictHistory({ recentVerdicts }) {
   );
 }
 
+const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+
+function describeSandboxAction(action) {
+  const body = action.body || {};
+  if (body.event === "diverted_to_sandbox") {
+    return {
+      title: "Session diverted to decoy vault",
+      detail: `${body.failed_logins} failed sign-ins with ${body.distinct_passwords} different passwords; attacker was shown a successful login.`,
+      tone: "text-soc-amber",
+    };
+  }
+  if (action.path?.includes("/transfer")) {
+    return {
+      title: `Transfer attempt · ${currency.format(Number(body.amount) || 0)}`,
+      detail: `To ${body.destination || "unknown account"}. Confirmed to the attacker; no funds moved.`,
+      tone: "text-soc-red",
+    };
+  }
+  if (action.path?.includes("web-attack")) {
+    return { title: `Web attack · ${body.attack_type || "payload"}`, detail: body.payload || "", tone: "text-soc-red" };
+  }
+  if (action.path?.includes("honeypot")) {
+    return { title: "Honeypot field touched", detail: `Source: ${body.source || "form"}`, tone: "text-soc-red" };
+  }
+  return { title: `${action.method} ${action.path}`, detail: "", tone: "text-soc-muted" };
+}
+
+function SandboxActivity({ sessionId }) {
+  const [replay, setReplay] = useState(undefined);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const data = await getSandboxReplay(sessionId);
+      if (!cancelled) setReplay(data);
+    };
+    load();
+    // Keep the timeline live while the attacker is still inside the decoy.
+    const timer = window.setInterval(load, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [sessionId]);
+
+  const actions = replay?.actions || [];
+
+  return (
+    <section className="mt-5 rounded-lg border border-soc-red/30 bg-soc-red/5 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-medium text-soc-muted">Sandbox activity</p>
+        {replay?.sandbox_token ? (
+          <span className="font-mono text-[11px] text-soc-muted">{replay.sandbox_token}</span>
+        ) : null}
+      </div>
+      <p className="mt-1 text-xs text-soc-muted">Everything this session did inside the decoy environment.</p>
+      {replay === undefined ? (
+        <p className="mt-4 text-sm text-soc-muted">Loading captured activity…</p>
+      ) : actions.length ? (
+        <ol className="mt-4 space-y-3">
+          {actions.map((action, index) => {
+            const item = describeSandboxAction(action);
+            return (
+              <li key={`${action.timestamp}-${index}`} className="flex gap-3">
+                <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-soc-red/80" />
+                <div className="min-w-0">
+                  <p className={`text-sm font-medium ${item.tone}`}>
+                    {item.title}
+                    <span className="ml-2 text-xs font-normal text-soc-muted">
+                      {new Date(Number(action.timestamp) * 1000).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        second: "2-digit",
+                      })}
+                    </span>
+                  </p>
+                  {item.detail ? <p className="mt-0.5 break-words text-xs text-soc-muted">{item.detail}</p> : null}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      ) : (
+        <p className="mt-4 text-sm text-soc-muted">No sandbox activity captured for this session.</p>
+      )}
+    </section>
+  );
+}
+
 export default function UserProfileModal() {
   const modal = useDashboardStore((state) => state.modal);
   const closeUserModal = useDashboardStore((state) => state.closeUserModal);
@@ -259,6 +349,8 @@ export default function UserProfileModal() {
                 )}
               </section>
             </div>
+
+            {verdict === "HACKER" ? <SandboxActivity sessionId={alert.id} /> : null}
           </>
         )}
       </div>
