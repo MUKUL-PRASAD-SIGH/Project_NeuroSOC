@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -58,6 +59,11 @@ RETRAIN_STATE_FILE = Path(
 RESULTS_DIR_PATH = Path(os.getenv("RETRAIN_RESULTS_DIR", str(RESULTS_DIR))).expanduser()
 BASE_DATASET_PATH = Path(os.getenv("RETRAIN_BASE_DATASET", str(DATASET_TRAIN_PATH))).expanduser()
 MIN_F1_IMPROVEMENT = float(os.getenv("RETRAIN_MIN_F1_IMPROVEMENT", "0.0"))
+HOLDOUT_EVAL_PATH = Path(
+    os.getenv("RETRAIN_HOLDOUT_PATH", str(RESULTS_DIR_PATH / "holdout_eval.json"))
+).expanduser()
+HOLDOUT_SEED = int(os.getenv("RETRAIN_HOLDOUT_SEED", "20260101"))
+HOLDOUT_SAMPLES_PER_CLASS = int(os.getenv("RETRAIN_HOLDOUT_SAMPLES_PER_CLASS", "40"))
 
 
 def utcnow_iso() -> str:
@@ -93,6 +99,65 @@ def coerce_feature_vector(raw_value: Any, expected_length: int = 80) -> list[flo
     return vector
 
 
+def _holdout_content_hash(features: list[list[float]], labels: list[str]) -> str:
+    payload = json.dumps({"features": features, "labels": labels}, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def load_or_create_holdout_set(
+    path: Path = HOLDOUT_EVAL_PATH,
+    seed: int = HOLDOUT_SEED,
+    samples_per_class: int = HOLDOUT_SAMPLES_PER_CLASS,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Load the fixed, hashed held-out evaluation set used to gate every retraining run.
+
+    Every candidate and the previous champion are scored on this exact set so runs are
+    comparable to each other, instead of comparing against whatever ad hoc train/val split
+    a past training run happened to use (which is how an overfit F1 of 1.0 on 137 rows ended
+    up permanently blocking honest candidates).
+    """
+    if path.exists():
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        features = payload["features"]
+        labels = payload["labels"]
+        expected_hash = payload.get("content_hash")
+        if expected_hash and _holdout_content_hash(features, labels) != expected_hash:
+            raise ValueError(f"Held-out evaluation set at {path} failed its content-hash check; refusing to use it.")
+        return np.asarray(features, dtype=np.float32), np.asarray(labels, dtype=object)
+
+    features_array, labels_array, _ = generate_synthetic_dataset(
+        n_samples_per_class=samples_per_class,
+        n_features=80,
+        seed=seed,
+    )
+    features = features_array.tolist()
+    labels = labels_array.tolist()
+    payload = {
+        "created_at": utcnow_iso(),
+        "seed": seed,
+        "samples_per_class": samples_per_class,
+        "content_hash": _holdout_content_hash(features, labels),
+        "features": features,
+        "labels": labels,
+    }
+    atomic_write_text(path, json.dumps(payload, indent=2))
+    return features_array, labels_array
+
+
+def evaluate_xgboost_on_holdout(
+    wrapper: XGBoostClassifier,
+    holdout_features: np.ndarray,
+    holdout_labels: np.ndarray,
+) -> float:
+    if wrapper.model is None:
+        raise RuntimeError("Cannot evaluate an XGBoost wrapper with no loaded model.")
+    label_encoder = LabelEncoder()
+    label_encoder.fit(CLASS_NAMES)
+    predictions = wrapper.model.predict(np.asarray(holdout_features, dtype=np.float32))
+    true_encoded = label_encoder.transform(holdout_labels)
+    return float(f1_score(true_encoded, predictions, average="macro"))
+
+
 @dataclass
 class FeedbackSample:
     id: int
@@ -113,6 +178,7 @@ class RetrainingState:
     last_model_version: str | None = None
     candidate_id: str | None = None
     last_validation_f1: float | None = None
+    last_holdout_f1: float | None = None
     total_runs: int = 0
     total_successful_retrains: int = 0
 
@@ -248,6 +314,7 @@ class RetrainingService:
         results_dir: Path = RESULTS_DIR_PATH,
         min_feedback_samples: int = RETRAIN_MIN_FEEDBACK_SAMPLES,
         min_f1_improvement: float = MIN_F1_IMPROVEMENT,
+        holdout_path: Path | None = None,
     ) -> None:
         self.repository = repository
         self.base_dataset_path = Path(base_dataset_path)
@@ -256,6 +323,7 @@ class RetrainingService:
         self.results_dir = Path(results_dir)
         self.min_feedback_samples = max(1, int(min_feedback_samples))
         self.min_f1_improvement = float(min_f1_improvement)
+        self.holdout_path = Path(holdout_path) if holdout_path is not None else self.results_dir / "holdout_eval.json"
 
     def _load_model_version_payload(self) -> dict[str, Any]:
         if not self.model_version_file.exists():
@@ -357,6 +425,10 @@ class RetrainingService:
             metrics=metrics,
         )
 
+    def _evaluate_on_holdout(self, wrapper: XGBoostClassifier) -> float:
+        holdout_features, holdout_labels = load_or_create_holdout_set(path=self.holdout_path)
+        return evaluate_xgboost_on_holdout(wrapper, holdout_features, holdout_labels)
+
     def _write_retraining_summary(self, metrics: dict[str, Any], state: RetrainingState) -> None:
         summary_path = self.results_dir / "latest_retraining_summary.json"
         payload = {
@@ -392,28 +464,38 @@ class RetrainingService:
         wrapper, validation_f1, validation_accuracy, metrics = self._train_xgboost(features, labels, feature_names)
 
         current_payload = self._load_model_version_payload()
-        current_xgb_f1 = current_payload.get("validation_f1", {}).get("xgb")
+        # The manifest's stored validation_f1 comes from whatever ad hoc train/val split that
+        # run happened to use (sometimes a handful of overfit rows) -- not a reliable, stable
+        # benchmark. Gating against it permanently rejects honest candidates trained on more
+        # data. Instead, score both the candidate and the previous accepted candidate on the
+        # same fixed held-out set (holdout_f1 / state.last_holdout_f1) and gate on that.
+        previous_active_manifest_f1 = current_payload.get("validation_f1", {}).get("xgb")
+        holdout_f1 = self._evaluate_on_holdout(wrapper)
 
         metrics.update(
             {
                 "new_feedback_rows": len(new_feedback),
                 "total_feedback_rows": len(all_feedback),
                 "candidate_feedback_max_id": max_feedback_id,
-                "previous_xgb_validation_f1": float(current_xgb_f1) if current_xgb_f1 is not None else None,
+                "active_manifest_reported_f1": float(previous_active_manifest_f1)
+                if previous_active_manifest_f1 is not None
+                else None,
+                "holdout_f1": holdout_f1,
+                "previous_holdout_f1": state.last_holdout_f1,
             }
         )
 
         state.last_seen_feedback_id = max_feedback_id
 
-        if current_xgb_f1 is not None and validation_f1 + self.min_f1_improvement < float(current_xgb_f1):
+        if state.last_holdout_f1 is not None and holdout_f1 + self.min_f1_improvement < state.last_holdout_f1:
             state.last_outcome = "skipped-regression"
             state.save(self.state_file)
             self._write_retraining_summary(metrics, state)
             return RetrainingResult(
                 status="skipped",
                 message=(
-                    f"Candidate validation F1 {validation_f1:.4f} regressed below "
-                    f"current {float(current_xgb_f1):.4f}; keeping existing model."
+                    f"Candidate held-out F1 {holdout_f1:.4f} regressed below "
+                    f"the last accepted held-out F1 {state.last_holdout_f1:.4f}; keeping existing model."
                 ),
                 processed_feedback_rows=len(new_feedback),
                 total_feedback_rows=len(all_feedback),
@@ -430,6 +512,7 @@ class RetrainingService:
         state.last_model_version = str(current_payload.get("version", "0.0.0"))
         state.candidate_id = candidate["candidate_id"]
         state.last_validation_f1 = validation_f1
+        state.last_holdout_f1 = holdout_f1
         state.last_outcome = "candidate-pending-approval"
         state.total_successful_retrains += 1
         state.save(self.state_file)
