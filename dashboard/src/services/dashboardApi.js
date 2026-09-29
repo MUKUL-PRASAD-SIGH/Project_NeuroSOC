@@ -78,6 +78,7 @@ function normalizeAlert(alert) {
     modelVersion: alert.modelVersion || null,
     status: alert.status || "new",
     decision: alert.decision || null,
+    explanation: alert.explanation || null,
   };
 }
 

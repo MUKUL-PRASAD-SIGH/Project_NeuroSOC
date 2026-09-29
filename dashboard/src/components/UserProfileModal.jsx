@@ -173,6 +173,40 @@ function ModelBreakdown({ raw }) {
   );
 }
 
+function TopFeatures({ explanation }) {
+  const features = explanation?.topFeatures;
+  if (!features?.length) return null;
+  const maxAbsImpact = Math.max(...features.map((item) => Math.abs(item.impact)), 0.0001);
+
+  return (
+    <div className="mt-4">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-medium text-soc-muted">
+          Top contributing features {explanation.method === "shap" ? "(SHAP)" : "(by magnitude)"}
+        </p>
+      </div>
+      <div className="mt-2 space-y-1.5">
+        {features.map((item) => (
+          <div key={item.feature} className="flex items-center gap-2 text-xs">
+            <span className="w-28 shrink-0 truncate font-mono text-[11px] text-soc-text" title={item.feature}>
+              {item.feature}
+            </span>
+            <div className="h-1.5 flex-1 rounded-full bg-soc-panelSoft">
+              <div
+                className={`h-1.5 rounded-full ${item.impact >= 0 ? "bg-soc-red" : "bg-soc-electric"}`}
+                style={{ width: `${Math.max((Math.abs(item.impact) / maxAbsImpact) * 100, 4)}%` }}
+              />
+            </div>
+            <span className="soc-tabular w-14 shrink-0 text-right font-mono text-[11px] text-soc-muted">
+              {item.value.toFixed(2)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function VerdictHistory({ recentVerdicts }) {
   if (!recentVerdicts?.length) return null;
   return (
@@ -302,7 +336,7 @@ export default function UserProfileModal() {
   if (!modal.open || !alert) return null;
 
   const verdict = alert.verdict || "INCONCLUSIVE";
-  const explain = (verdictExplain[verdict] || verdictExplain.INCONCLUSIVE)(alert);
+  const explain = alert.explanation?.summary || (verdictExplain[verdict] || verdictExplain.INCONCLUSIVE)(alert);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
@@ -394,6 +428,7 @@ export default function UserProfileModal() {
                   Model Breakdown
                 </p>
                 <ModelBreakdown raw={alert.raw} />
+                <TopFeatures explanation={alert.explanation} />
               </section>
 
               {/* Right — verdict history */}

@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
+import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect, status
 from fastapi.exceptions import RequestValidationError
@@ -422,6 +423,20 @@ class StatsResponse(StrictResponseModel):
     uptimeSeconds: StrictInt
 
 
+class ExplanationFeatureResponse(StrictResponseModel):
+    feature: StrictStr
+    value: FiniteFloat
+    impact: FiniteFloat
+
+
+class AlertExplanationResponse(StrictResponseModel):
+    summary: StrictStr
+    topFeatures: list[ExplanationFeatureResponse]
+    snnSpikeScore: FiniteFloat
+    lnnBehavioralDelta: FiniteFloat
+    method: StrictStr
+
+
 class AlertResponse(StrictResponseModel):
     id: StrictStr
     severity: StrictStr
@@ -438,6 +453,7 @@ class AlertResponse(StrictResponseModel):
     modelVersion: StrictStr
     status: StrictStr = "new"
     decision: StrictStr | None = None
+    explanation: AlertExplanationResponse
 
 
 class RawAlertResponse(StrictResponseModel):
@@ -1538,6 +1554,131 @@ def _message_for_verdict(verdict: dict[str, Any]) -> str:
     return "Session aligned with the stored user profile and passed ensemble checks."
 
 
+_SHAP_EXPLAINER_CACHE: dict[str, Any] = {"model_id": None, "explainer": None}
+
+
+def _feature_vector_and_names_for_verdict(verdict: dict[str, Any]) -> tuple[list[float], list[str]]:
+    feature_names = list(runtime.engine.feature_names) if "runtime" in globals() and runtime.engine.feature_names else None
+    if not feature_names:
+        feature_names = [f"feature_{index}" for index in range(80)]
+
+    raw_features = verdict.get("features")
+    if isinstance(raw_features, list) and raw_features:
+        vector = [float(value) for value in raw_features[:80]]
+    else:
+        features_dict = verdict.get("features_dict")
+        if isinstance(features_dict, dict):
+            vector = VerdictRepository._ordered_flow_features(features_dict)
+        else:
+            vector = [0.0] * 80
+    if len(vector) < 80:
+        vector.extend([0.0] * (80 - len(vector)))
+    return vector[:80], feature_names[:80]
+
+
+def _shap_top_features(
+    feature_vector: list[float],
+    feature_names: list[str],
+    predicted_class_index: int,
+    top_n: int = 5,
+) -> list[dict[str, Any]] | None:
+    xgb_wrapper = runtime.engine.xgb_model if "runtime" in globals() else None
+    model = getattr(xgb_wrapper, "model", None)
+    if model is None or not hasattr(model, "get_booster"):
+        return None
+    try:
+        import shap
+    except ImportError:
+        return None
+
+    mapped_vector = feature_vector
+    feature_bridge = getattr(xgb_wrapper, "feature_bridge", None)
+    if feature_bridge is not None:
+        try:
+            mapped_vector = list(feature_bridge.map_vector(np.asarray(feature_vector, dtype=np.float32)))
+        except Exception as exc:
+            log.warning("SHAP legacy feature mapping failed, using raw features: %s", exc)
+
+    model_identity = id(model)
+    if _SHAP_EXPLAINER_CACHE.get("model_id") != model_identity:
+        try:
+            _SHAP_EXPLAINER_CACHE["explainer"] = shap.TreeExplainer(model)
+            _SHAP_EXPLAINER_CACHE["model_id"] = model_identity
+        except Exception as exc:
+            log.warning("Could not build a SHAP explainer for the active XGBoost model: %s", exc)
+            return None
+    explainer = _SHAP_EXPLAINER_CACHE["explainer"]
+
+    try:
+        array = np.asarray([mapped_vector], dtype=np.float32)
+        raw_shap_values = explainer.shap_values(array)
+        if isinstance(raw_shap_values, list):
+            class_index = min(predicted_class_index, len(raw_shap_values) - 1)
+            class_values = np.asarray(raw_shap_values[class_index])[0]
+        else:
+            raw_array = np.asarray(raw_shap_values)
+            if raw_array.ndim == 3:
+                class_index = min(predicted_class_index, raw_array.shape[2] - 1)
+                class_values = raw_array[0, :, class_index]
+            else:
+                class_values = raw_array[0]
+    except Exception as exc:
+        log.warning("SHAP computation failed for the active XGBoost model: %s", exc)
+        return None
+
+    ranked = sorted(
+        zip(feature_names, feature_vector, (float(v) for v in class_values.tolist())),
+        key=lambda item: abs(item[2]),
+        reverse=True,
+    )[:top_n]
+    return [{"feature": name, "value": float(value), "impact": impact} for name, value, impact in ranked]
+
+
+def _fallback_top_features(feature_vector: list[float], feature_names: list[str], top_n: int = 5) -> list[dict[str, Any]]:
+    ranked = sorted(zip(feature_names, feature_vector), key=lambda item: abs(item[1]), reverse=True)[:top_n]
+    return [{"feature": name, "value": float(value), "impact": 0.0} for name, value in ranked]
+
+
+def _explanation_for_verdict(verdict: dict[str, Any]) -> dict[str, Any]:
+    feature_vector, feature_names = _feature_vector_and_names_for_verdict(verdict)
+    xgb_class = str(verdict.get("xgb_class") or "OTHER").strip().upper()
+    predicted_class_index = TRAINING_CLASS_NAMES.index(xgb_class) if xgb_class in TRAINING_CLASS_NAMES else 0
+
+    top_features = _shap_top_features(feature_vector, feature_names, predicted_class_index)
+    method = "shap"
+    if top_features is None:
+        top_features = _fallback_top_features(feature_vector, feature_names)
+        method = "feature_magnitude"
+
+    snn_score = float(verdict.get("snn_score", 0.0) or 0.0)
+    behavioral_delta = float(verdict.get("behavioral_delta", 0.0) or 0.0)
+    lnn_class = str(verdict.get("lnn_class") or "")
+    top_feature = top_features[0] if top_features else {"feature": "n/a", "value": 0.0}
+
+    verdict_label = verdict.get("verdict")
+    if verdict_label == "HACKER":
+        summary = (
+            f"{xgb_class.replace('_', ' ').title()} pattern: strongest signal was "
+            f"{top_feature['feature']} (value {top_feature['value']:.2f}). "
+            f"SNN spike score {snn_score:.2f}, LNN behavioral drift {behavioral_delta:.2f}."
+        )
+    elif verdict_label == "FORGETFUL_USER":
+        summary = (
+            f"Behavioral drift {behavioral_delta:.2f} exceeded the normal-user baseline without matching an "
+            f"attack pattern; LNN class {lnn_class or 'INCONCLUSIVE'}."
+        )
+    else:
+        summary = f"SNN spike score {snn_score:.2f} and LNN class {lnn_class or 'BENIGN'} stayed within normal range."
+
+    return {
+        "summary": summary,
+        "topFeatures": top_features,
+        "snnSpikeScore": snn_score,
+        "lnnBehavioralDelta": behavioral_delta,
+        "method": method,
+    }
+
+
 def _dimensions_from_profile(user_id: str) -> list[dict[str, Any]]:
     profile = runtime.engine.behavioral_profiler.load_profile(user_id) if "runtime" in globals() else None
     vector = profile.profile_vector.astype(float).tolist() if profile is not None else [0.0] * len(BEHAVIOR_DIMENSIONS)
@@ -1608,6 +1749,7 @@ def _format_alert_payload(
         "modelVersion": verdict.get("model_version", runtime.engine.current_model_version if "runtime" in globals() else "0.0.0"),
         "status": (decision_record or {}).get("status", "new"),
         "decision": (decision_record or {}).get("decision"),
+        "explanation": _explanation_for_verdict(verdict),
     }
 
 
