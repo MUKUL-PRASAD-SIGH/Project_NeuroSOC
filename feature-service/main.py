@@ -40,6 +40,7 @@ from collections import OrderedDict
 from typing import Any
 
 from kafka import KafkaConsumer, KafkaProducer
+from prometheus_client import Counter, start_http_server
 from kafka.errors import NoBrokersAvailable
 
 logging.basicConfig(
@@ -52,6 +53,10 @@ log = logging.getLogger(__name__)
 KAFKA_BOOTSTRAP       = os.getenv("KAFKA_BOOTSTRAP",        "kafka:9092")
 FLOW_TIMEOUT_SECONDS  = float(os.getenv("FLOW_TIMEOUT_SECONDS", "3.0"))
 MAX_FLOWS             = int(os.getenv("MAX_FLOWS",          "100000"))
+METRICS_PORT          = int(os.getenv("METRICS_PORT", "9101"))
+
+PACKETS_PROCESSED = Counter("neurosoc_feature_packets_processed_total", "Raw packets consumed by the feature engine")
+FLOWS_PUBLISHED = Counter("neurosoc_feature_flows_published_total", "Flow feature records published downstream")
 IN_TOPIC              = "raw-packets"
 OUT_TOPIC             = "extracted-features"
 LOG_EVERY             = 100    # log every N flows
@@ -605,6 +610,7 @@ def _janitor(producer: KafkaProducer) -> None:
                     "idempotency_key": f"network.flow:{flow_id}",
                 }
                 producer.send(OUT_TOPIC, value=msg)
+                FLOWS_PUBLISHED.inc()
                 flow_count += 1
                 if flow_count % LOG_EVERY == 0:
                     log.info("📊 Extracted %d flows → '%s'.", flow_count, OUT_TOPIC)
@@ -616,6 +622,9 @@ def _janitor(producer: KafkaProducer) -> None:
 def main() -> None:
     log.info("Feature Engine starting. Flow timeout: %.1fs  Max flows: %d",
              FLOW_TIMEOUT_SECONDS, MAX_FLOWS)
+
+    start_http_server(METRICS_PORT)
+    log.info("📈 Metrics exposed on :%d/metrics", METRICS_PORT)
 
     consumer = _build_consumer()
     producer = _build_producer()
@@ -630,6 +639,7 @@ def main() -> None:
     for msg in consumer:
         try:
             pkt = msg.value
+            PACKETS_PROCESSED.inc()
             ts  = float(pkt.get("timestamp", time.time()))
             key = _flow_key(pkt)
             flow = _get_or_create_flow(key, ts)

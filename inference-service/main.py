@@ -22,6 +22,7 @@ from urllib import request as urllib_request
 
 import numpy as np
 import uvicorn
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 from fastapi import FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect, status
 from fastapi.exceptions import RequestValidationError
 from kafka import KafkaConsumer, KafkaProducer
@@ -213,6 +214,13 @@ SMTP_PASS = os.getenv("SMTP_PASS", "")
 REPORT_EMAIL = os.getenv("REPORT_EMAIL", "").strip()
 REPORT_TIME = os.getenv("REPORT_TIME", "06:00").strip()
 DIGEST_POLL_SECONDS = _read_positive_int_env("DIGEST_POLL_SECONDS", "60")
+
+EVENTS_PROCESSED = Counter("neurosoc_events_processed_total", "Feature events consumed from Kafka")
+INFERENCE_LATENCY_SECONDS = Histogram(
+    "neurosoc_inference_latency_seconds", "Time to score one session through the decision engine"
+)
+VERDICTS_TOTAL = Counter("neurosoc_verdicts_total", "Verdicts emitted by the decision engine", ["verdict"])
+SANDBOX_ACTIVE_SESSIONS = Gauge("neurosoc_sandbox_active_sessions", "Portal sessions currently diverted to the sandbox")
 
 SQLI_PATTERN = re.compile(r"(union\s+select|or\s+1\s*=\s*1|--|/\*|drop\s+table|insert\s+into)", re.IGNORECASE)
 BEHAVIOR_DIMENSIONS = [
@@ -936,6 +944,10 @@ class PortalState:
                 return None
             session = self._sessions.get(self._current_session_id)
             return None if session is None else session.latest_verdict
+
+    def count_active_sandbox_sessions(self) -> int:
+        with self._lock:
+            return sum(1 for session in self._sessions.values() if session.sandbox_token)
 
     def replay_stub(self, session_id: str) -> list[dict[str, Any]]:
         with self._lock:
@@ -2121,6 +2133,7 @@ class InferenceRuntime:
             log.warning("Failed to persist verdict %s to PostgreSQL: %s", verdict.session_id, exc)
 
     def _handle_verdict(self, verdict: ThreatVerdict) -> ThreatVerdict:
+        VERDICTS_TOTAL.labels(verdict=verdict.verdict).inc()
         self._persist_verdict(verdict)
         canonical_verdict = verdict.to_dict()
         with self._lock:
@@ -2173,7 +2186,9 @@ class InferenceRuntime:
 
     def _handle_feature_message(self, payload: dict[str, Any]) -> ThreatVerdict:
         session_data = self._build_session_data(payload)
-        verdict = self.engine.analyze_session(session_data)
+        EVENTS_PROCESSED.inc()
+        with INFERENCE_LATENCY_SECONDS.time():
+            verdict = self.engine.analyze_session(session_data)
         self._handle_verdict(verdict)
         with self._lock:
             self._processed_messages += 1
@@ -2444,7 +2459,7 @@ async def unexpected_error_handler(request: Request, exc: Exception) -> JSONResp
 
 
 def _api_key_exempt(path: str) -> bool:
-    if path in {"/", "/health"}:
+    if path in {"/", "/health", "/metrics"}:
         return True
     return APP_ENV in {"local", "test"} and (
         path == "/openapi.json" or path.startswith("/docs") or path.startswith("/redoc")
@@ -2953,6 +2968,12 @@ def root() -> dict[str, Any]:
 @app.get("/health", response_model=HealthResponse)
 def health() -> dict[str, Any]:
     return runtime.health()
+
+
+@app.get("/metrics")
+def metrics() -> Response:
+    SANDBOX_ACTIVE_SESSIONS.set(portal_state.count_active_sandbox_sessions())
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/api/v1/verdicts/latest", response_model=LatestVerdictsResponse)

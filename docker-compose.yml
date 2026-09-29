@@ -314,6 +314,8 @@ services:
       - prometheus
     volumes:
       - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/neurosoc-dashboards
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-neuroshield_admin}
       GF_USERS_ALLOW_SIGN_UP: "false"

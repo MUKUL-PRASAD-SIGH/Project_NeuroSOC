@@ -39,6 +39,8 @@ from typing import Any
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.responses import Response
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, generate_latest
 from fastapi.middleware.cors import CORSMiddleware
 from kafka import KafkaProducer
 from kafka.errors import NoBrokersAvailable
@@ -102,9 +104,12 @@ def build_producer() -> KafkaProducer:
 _published_count = 0
 _count_lock = threading.Lock()
 
+EVENTS_PUBLISHED = Counter("neurosoc_ingestion_events_published_total", "Events published to Kafka", ["mode"])
+
 
 def publish(producer: KafkaProducer, record: dict[str, Any]) -> None:
     producer.send(TOPIC, value=record)
+    EVENTS_PUBLISHED.labels(mode=INGESTION_MODE).inc()
     with _count_lock:
         global _published_count
         _published_count += 1
@@ -386,6 +391,11 @@ async def health():
         "mode":       INGESTION_MODE,
         "published":  _published_count,
     }
+
+
+@app.get("/metrics")
+async def metrics() -> Response:
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/stats")

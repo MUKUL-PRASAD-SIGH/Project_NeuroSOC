@@ -15,6 +15,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from kafka import KafkaProducer
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, generate_latest
 from pydantic import BaseModel, Field
 
 try:
@@ -42,7 +43,16 @@ HOST = os.getenv("SANDBOX_HOST", "0.0.0.0")
 PORT = int(os.getenv("SANDBOX_PORT", "8001"))
 FEEDBACK_TRIGGER_TOPIC = os.getenv("FEEDBACK_TRIGGER_TOPIC", "feedback-trigger")
 
-EXEMPT_PATH_PREFIXES = ("/health", "/sessions")
+EXEMPT_PATH_PREFIXES = ("/health", "/sessions", "/metrics")
+
+SESSIONS_CREATED = Counter("neurosoc_sandbox_sessions_created_total", "Sandbox sessions created")
+SESSIONS_ACTIVE = Gauge("neurosoc_sandbox_sessions_active", "Currently active sandbox sessions")
+ACTIONS_LOGGED = Counter("neurosoc_sandbox_actions_total", "Actions captured inside the sandbox")
+HONEYPOT_HITS = Counter(
+    "neurosoc_sandbox_honeypot_hits_total",
+    "Honeypot/canary triggers observed inside the sandbox",
+    ["trigger_type"],
+)
 HONEYPOT_PATH_RULES: dict[str, tuple[str, str]] = {
     "/api/admin": ("HONEYPOT_ENDPOINT", "CRITICAL"),
     "/api/debug": ("HONEYPOT_ENDPOINT", "CRITICAL"),
@@ -327,6 +337,13 @@ class SandboxRepository:
                 )
         return dict(session)
 
+    def count_active_sessions(self) -> int:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) AS active FROM sandbox_sessions WHERE ended_at IS NULL")
+                row = cur.fetchone()
+        return int(row["active"]) if row else 0
+
     def expired_tokens(self, timeout_seconds: int) -> list[str]:
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -368,6 +385,10 @@ class SandboxManager:
     def start(self) -> None:
         self.repository.bootstrap()
         try:
+            SESSIONS_ACTIVE.set(self.repository.count_active_sessions())
+        except Exception as exc:
+            log.warning("Could not seed the active sandbox session gauge: %s", exc)
+        try:
             self._producer = KafkaProducer(
                 bootstrap_servers=KAFKA_BOOTSTRAP,
                 value_serializer=lambda payload: json.dumps(payload).encode("utf-8"),
@@ -384,7 +405,10 @@ class SandboxManager:
             self._producer = None
 
     def create_session(self, payload: CreateSessionRequest) -> dict[str, Any]:
-        return self.repository.create_session(payload.resolved_session_id(), payload.user_id, payload.source_ip)
+        session = self.repository.create_session(payload.resolved_session_id(), payload.user_id, payload.source_ip)
+        SESSIONS_CREATED.inc()
+        SESSIONS_ACTIVE.inc()
+        return session
 
     def log_action(
         self,
@@ -402,6 +426,7 @@ class SandboxManager:
             response_sent=response_data,
             trigger_tags=[trigger.trigger_type for trigger in triggers],
         )
+        ACTIONS_LOGGED.inc()
         for trigger in triggers:
             self.repository.record_honeypot_hit(
                 sandbox_token=sandbox_token,
@@ -413,9 +438,12 @@ class SandboxManager:
                     "method": str(request_data.get("method") or "GET"),
                 },
             )
+            HONEYPOT_HITS.labels(trigger_type=trigger.trigger_type).inc()
 
     def terminate_session(self, sandbox_token: str) -> dict[str, Any] | None:
         session = self.repository.terminate_session(sandbox_token)
+        if session:
+            SESSIONS_ACTIVE.dec()
         if session and self._producer is not None:
             self._producer.send(
                 FEEDBACK_TRIGGER_TOPIC,
@@ -823,6 +851,11 @@ async def sandbox_token_middleware(request: Request, call_next):
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {"status": "ok", "timestamp": time.time(), "sandbox_timeout_sec": SANDBOX_TIMEOUT_SEC}
+
+
+@app.get("/metrics")
+def metrics() -> Response:
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.post("/sessions")
