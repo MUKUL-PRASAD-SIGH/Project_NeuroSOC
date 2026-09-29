@@ -12,7 +12,7 @@ import time
 import uuid
 from collections import OrderedDict, deque
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -175,6 +175,7 @@ def _parse_trusted_proxy_ips(value: str) -> str:
 
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
 INPUT_TOPIC = os.getenv("INFERENCE_INPUT_TOPIC", "extracted-features")
 VERDICTS_TOPIC = os.getenv("VERDICTS_TOPIC", "verdicts")
 ALERTS_TOPIC = os.getenv("ALERTS_TOPIC", "alerts")
@@ -751,6 +752,41 @@ class FixedWindowRateLimiter:
             return None
 
 
+def _build_redis_client() -> Any | None:
+    """Best-effort Redis client for portal-session durability.
+
+    Absent REDIS_URL, or if the package/connection is unavailable, this returns None and
+    PortalState falls back to pure in-memory sessions -- restarts lose state, exactly like
+    before this feature existed, rather than the process failing to start.
+    """
+    if not REDIS_URL:
+        return None
+    try:
+        import redis as redis_lib
+
+        return redis_lib.from_url(REDIS_URL, socket_connect_timeout=2, socket_timeout=2, decode_responses=True)
+    except Exception as exc:
+        log.warning("Redis client could not be constructed from REDIS_URL: %s", exc)
+        return None
+
+
+_PORTAL_SESSION_SET_FIELDS = ("known_aliases", "login_passwords")
+
+
+def _serialize_portal_session(session: "PortalSession") -> str:
+    payload = asdict(session)
+    for field_name in _PORTAL_SESSION_SET_FIELDS:
+        payload[field_name] = sorted(payload[field_name])
+    return json.dumps(payload)
+
+
+def _deserialize_portal_session(raw: str) -> "PortalSession":
+    payload = json.loads(raw)
+    for field_name in _PORTAL_SESSION_SET_FIELDS:
+        payload[field_name] = set(payload.get(field_name, []))
+    return PortalSession(**payload)
+
+
 @dataclass
 class PortalSession:
     session_id: str
@@ -777,12 +813,53 @@ class PortalSession:
 
 
 class PortalState:
-    def __init__(self) -> None:
+    def __init__(self, redis_client: Any | None = None) -> None:
         self._lock = threading.RLock()
         self._sessions: dict[str, PortalSession] = {}
         self._alias_to_session: dict[str, str] = {}
         self._user_current_session: dict[str, str] = {}
         self._current_session_id: str | None = None
+        self._redis = redis_client
+
+    def _redis_key(self, session_id: str) -> str:
+        return f"portal:session:{session_id}"
+
+    def _persist(self, session: PortalSession) -> None:
+        if self._redis is None:
+            return
+        try:
+            self._redis.set(
+                self._redis_key(session.session_id),
+                _serialize_portal_session(session),
+                ex=PORTAL_SESSION_TTL_SECONDS,
+            )
+        except Exception as exc:
+            log.warning("Failed to persist portal session %s to Redis: %s", session.session_id, exc)
+
+    def load_from_redis(self) -> int:
+        """Rehydrate sessions after a restart. Best-effort; returns the number loaded."""
+        if self._redis is None:
+            return 0
+        loaded = 0
+        try:
+            for key in self._redis.scan_iter(match=self._redis_key("*")):
+                raw = self._redis.get(key)
+                if not raw:
+                    continue
+                try:
+                    session = _deserialize_portal_session(raw)
+                except Exception as exc:
+                    log.warning("Skipping unreadable portal session at %s: %s", key, exc)
+                    continue
+                with self._lock:
+                    self._sessions[session.session_id] = session
+                    for alias in session.known_aliases:
+                        self._alias_to_session[alias] = session.session_id
+                        self._user_current_session[alias] = session.session_id
+                loaded += 1
+        except Exception as exc:
+            log.warning("Failed to load portal sessions from Redis: %s", exc)
+        return loaded
 
     def cleanup(self) -> None:
         cutoff = time.time() - PORTAL_SESSION_TTL_SECONDS
@@ -830,6 +907,7 @@ class PortalState:
                 self._alias_to_session[normalized] = session.session_id
                 self._user_current_session[normalized] = session.session_id
             session.touch()
+            self._persist(session)
             return session
 
     def record_behavioral(self, request: BehavioralIngestRequest) -> PortalSession:
@@ -842,6 +920,7 @@ class PortalState:
                 )
             session.behavioral_events = session.behavioral_events[-500:]
             session.behavioral_vector = extract_session_vector(session.behavioral_events).astype(float).tolist()
+            self._persist(session)
             return session
 
     def record_login_attempt(
@@ -859,6 +938,7 @@ class PortalState:
                 session.login_passwords.add(password)
             if not authenticated:
                 session.failed_logins += 1
+            self._persist(session)
             return session
 
     def record_honeypot(
@@ -871,6 +951,7 @@ class PortalState:
         with self._lock:
             session = self._ensure_session(identifier, session_id, source_ip)
             session.honeypot_hits.append({"source": source, "timestamp": time.time()})
+            self._persist(session)
             return session
 
     def record_web_attack(
@@ -884,6 +965,7 @@ class PortalState:
         with self._lock:
             session = self._ensure_session(identifier, session_id, source_ip)
             session.web_attacks.append({"attack_type": attack_type, "payload": payload, "timestamp": time.time()})
+            self._persist(session)
             return session
 
     def record_transfer(
@@ -906,6 +988,7 @@ class PortalState:
                 }
             )
             session.transfer_attempts = session.transfer_attempts[-25:]
+            self._persist(session)
             return session
 
     def set_verdict(self, session_id: str, verdict: dict[str, Any]) -> None:
@@ -916,6 +999,7 @@ class PortalState:
             session.latest_verdict = verdict
             self._current_session_id = session_id
             session.touch()
+            self._persist(session)
 
     def attach_sandbox(self, session_id: str, sandbox_token: str, mode: str) -> None:
         with self._lock:
@@ -926,6 +1010,7 @@ class PortalState:
             session.sandbox_mode = mode
             session.sandbox_started_at = session.sandbox_started_at or time.time()
             session.touch()
+            self._persist(session)
 
     def get_session(self, identifier: str | None = None, session_id: str | None = None) -> PortalSession | None:
         with self._lock:
@@ -1494,7 +1579,7 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
-portal_state = PortalState()
+portal_state = PortalState(redis_client=_build_redis_client())
 sandbox_gateway = SandboxGateway(SANDBOX_BASE_URL) if SANDBOX_BASE_URL else None
 
 
@@ -2404,6 +2489,9 @@ def _audit_unavailable_response() -> JSONResponse:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     _validate_startup_configuration()
+    restored = portal_state.load_from_redis()
+    if restored:
+        log.info("Restored %d portal session(s) from Redis.", restored)
     runtime.start()
     try:
         yield
