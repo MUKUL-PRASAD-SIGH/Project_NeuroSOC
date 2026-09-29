@@ -43,7 +43,8 @@ HOST = os.getenv("SANDBOX_HOST", "0.0.0.0")
 PORT = int(os.getenv("SANDBOX_PORT", "8001"))
 FEEDBACK_TRIGGER_TOPIC = os.getenv("FEEDBACK_TRIGGER_TOPIC", "feedback-trigger")
 
-EXEMPT_PATH_PREFIXES = ("/health", "/sessions", "/metrics")
+EXEMPT_PATH_PREFIXES = ("/health", "/metrics")
+SANDBOX_SERVICE_TOKEN = os.getenv("SANDBOX_SERVICE_TOKEN", "").strip()
 
 SESSIONS_CREATED = Counter("neurosoc_sandbox_sessions_created_total", "Sandbox sessions created")
 SESSIONS_ACTIVE = Gauge("neurosoc_sandbox_sessions_active", "Currently active sandbox sessions")
@@ -830,6 +831,17 @@ app = FastAPI(title="NeuroShield Sandbox", version="0.2.0", lifespan=lifespan)
 
 @app.middleware("http")
 async def sandbox_token_middleware(request: Request, call_next):
+    if request.url.path.startswith("/sessions"):
+        # Session create/terminate/replay is inference-service-to-sandbox-service traffic,
+        # never attacker traffic -- gate it on a shared service token instead of the
+        # attacker-facing sandbox token. SANDBOX_SERVICE_TOKEN unset (local dev default)
+        # leaves this open, matching the rest of the codebase's opt-in auth pattern.
+        if SANDBOX_SERVICE_TOKEN:
+            provided = request.headers.get("x-service-token", "")
+            if provided != SANDBOX_SERVICE_TOKEN:
+                return JSONResponse(status_code=401, content={"detail": "Missing or invalid service token"})
+        return await call_next(request)
+
     if any(request.url.path.startswith(prefix) for prefix in EXEMPT_PATH_PREFIXES):
         return await call_next(request)
 

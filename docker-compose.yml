@@ -179,6 +179,7 @@ services:
       FEATURE_COLUMNS_PATH: /data/feature_columns.txt
       SANDBOX_CONFIDENCE_THRESHOLD: "0.50"
       SANDBOX_BASE_URL: http://sandbox:8001
+      SANDBOX_SERVICE_TOKEN: ${SANDBOX_SERVICE_TOKEN:-}
       OIDC_ISSUER: ${OIDC_ISSUER:-http://keycloak:8080/realms/neurosoc}
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:-neurosoc-dashboard}
       OIDC_REQUIRED: ${OIDC_REQUIRED:-false}
@@ -219,6 +220,7 @@ services:
       KAFKA_BOOTSTRAP: kafka:9092
       DATABASE_URL: ${DATABASE_URL:-postgresql://ns_user:ns_pass@postgres:5432/neuroshield}
       SANDBOX_TIMEOUT_SEC: "300"
+      SANDBOX_SERVICE_TOKEN: ${SANDBOX_SERVICE_TOKEN:-}
     restart: unless-stopped
 
   feedback:

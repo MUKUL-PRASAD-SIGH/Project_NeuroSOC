@@ -243,6 +243,23 @@ export function postBehavioral(payload: BehavioralPayload) {
   });
 }
 
+export interface DecoyLedgerTransaction {
+  id: string;
+  date: string;
+  description: string;
+  amount: number;
+}
+
+export interface DecoyAccount {
+  balance?: number;
+  accountMasked?: string;
+  // Server-side decoy ledger (sandboxed sessions only) -- deterministic per user and
+  // inclusive of this session's own transfer attempts, so it stays identical across
+  // devices and reloads instead of resetting to whatever the browser's localStorage
+  // remembers. Not yet consumed by Dashboard/Transfer rendering; see WALKTHROUGH.md.
+  transactions?: DecoyLedgerTransaction[];
+}
+
 export function loginBank(payload: BankLoginPayload) {
   return requestJson<{
     authenticated: boolean;
@@ -253,7 +270,7 @@ export function loginBank(payload: BankLoginPayload) {
     confidence: number;
     sandbox?: { active: boolean; mode?: string; sandboxToken?: string; sandboxPath?: string } | null;
     next: string;
-    account?: { balance?: number; accountMasked?: string };
+    account?: DecoyAccount;
     error?: string;
   }>('/api/v1/bank/login', {
     method: 'POST',
@@ -274,6 +291,7 @@ export function transferBank(payload: BankTransferPayload) {
     confidence: number;
     sandbox?: { active: boolean; mode?: string; sandboxToken?: string; sandboxPath?: string } | null;
     message: string;
+    account?: DecoyAccount;
   }>('/api/v1/bank/transfer', {
     method: 'POST',
     body: JSON.stringify({

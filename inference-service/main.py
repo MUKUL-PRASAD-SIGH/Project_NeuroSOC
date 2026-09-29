@@ -13,7 +13,7 @@ import uuid
 from collections import OrderedDict, deque
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
@@ -202,6 +202,7 @@ TRUSTED_PROXY_IPS = _parse_trusted_proxy_ips(os.getenv("TRUSTED_PROXY_IPS", "127
 MAX_REQUEST_BODY_BYTES = _read_positive_int_env("API_MAX_REQUEST_BODY_BYTES", "1048576")
 API_RATE_LIMIT_PER_MINUTE = _read_positive_int_env("API_RATE_LIMIT_PER_MINUTE", "120")
 SANDBOX_BASE_URL = os.getenv("SANDBOX_BASE_URL", "").rstrip("/")
+SANDBOX_SERVICE_TOKEN = os.getenv("SANDBOX_SERVICE_TOKEN", "").strip()
 IPINFO_TOKEN = os.getenv("IPINFO_TOKEN", "").strip()
 SANDBOX_TIMEOUT_SECONDS = int(os.getenv("SANDBOX_TIMEOUT_SEC", "300"))
 PORTAL_SESSION_TTL_SECONDS = int(os.getenv("PORTAL_SESSION_TTL_SECONDS", "1800"))
@@ -535,9 +536,17 @@ class BehavioralIngestResponse(StrictResponseModel):
     vector: list[FiniteFloat] = Field(min_length=20, max_length=20)
 
 
+class TransactionResponse(StrictResponseModel):
+    id: StrictStr
+    date: StrictStr
+    description: StrictStr
+    amount: FiniteFloat
+
+
 class BankAccountSummaryResponse(StrictResponseModel):
     balance: FiniteFloat
     accountMasked: str
+    transactions: list[TransactionResponse] = []
 
 
 class BankLoginResponse(StrictResponseModel):
@@ -560,6 +569,7 @@ class BankTransferResponse(StrictResponseModel):
     confidence: Probability
     sandbox: SandboxActivationResponse | None
     message: StrictStr
+    account: BankAccountSummaryResponse | None = None
 
 
 class BankEventResponse(StrictResponseModel):
@@ -1084,14 +1094,17 @@ class PortalState:
 
 
 class SandboxGateway:
-    def __init__(self, base_url: str) -> None:
+    def __init__(self, base_url: str, service_token: str = "") -> None:
         self.base_url = base_url.rstrip("/")
+        self.service_token = service_token
 
     def _request(self, path: str, method: str = "GET", payload: dict[str, Any] | None = None) -> dict[str, Any]:
         if not self.base_url:
             raise RuntimeError("SANDBOX_BASE_URL is not configured.")
         body = None
         headers = {"Content-Type": "application/json"}
+        if self.service_token:
+            headers["X-Service-Token"] = self.service_token
         if payload is not None:
             body = json.dumps(payload).encode("utf-8")
         request = urllib_request.Request(f"{self.base_url}{path}", method=method, data=body, headers=headers)
@@ -1580,7 +1593,7 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 portal_state = PortalState(redis_client=_build_redis_client())
-sandbox_gateway = SandboxGateway(SANDBOX_BASE_URL) if SANDBOX_BASE_URL else None
+sandbox_gateway = SandboxGateway(SANDBOX_BASE_URL, SANDBOX_SERVICE_TOKEN) if SANDBOX_BASE_URL else None
 
 
 def _account_for_user(user_id: str) -> dict[str, Any] | None:
@@ -2771,12 +2784,73 @@ def _session_snapshot(identifier: str, session_id: str | None, source_ip: str) -
     return portal_state.bind_aliases(identifier, session_id, [identifier])
 
 
-def _decoy_account(user_id: str, account: dict[str, Any] | None) -> dict[str, Any]:
-    """Stable, believable decoy balance for a sandboxed session; never the real one."""
+_DECOY_MERCHANTS = (
+    "Whole Foods Market",
+    "Pacific Gas & Electric",
+    "Direct Deposit - Payroll",
+    "Blue Bottle Coffee",
+    "Amazon.com",
+    "Comcast Internet",
+)
+
+
+def _decoy_transaction_base_history(user_id: str) -> list[dict[str, Any]]:
+    """Deterministic, plausible transaction history seeded from user_id -- same on every
+    device and every reload, since it is derived from the user identity rather than stored
+    per-request state. Never real transaction data."""
+    digest = hashlib.sha256(f"decoy-history:{user_id}".encode("utf-8")).digest()
+    # Anchor to the start of today (UTC), not the live clock: two requests seconds apart must
+    # produce byte-identical dates, or the ledger would visibly drift on every reload.
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    history: list[dict[str, Any]] = []
+    for index, merchant in enumerate(_DECOY_MERCHANTS):
+        byte_pair = digest[(index * 2) % len(digest) : (index * 2) % len(digest) + 2]
+        magnitude = int.from_bytes(byte_pair, "big") % 18_000 / 100.0
+        is_credit = "Payroll" in merchant
+        amount = round(magnitude + 20.0, 2) * (1 if is_credit else -1)
+        days_ago = 1 + (digest[index % len(digest)] % 27)
+        history.append(
+            {
+                "id": f"decoy-{user_id}-{index}",
+                "date": (today_start - timedelta(days=days_ago)).isoformat(),
+                "description": merchant,
+                "amount": amount,
+            }
+        )
+    return sorted(history, key=lambda item: item["date"], reverse=True)
+
+
+def _decoy_transactions_for_session(user_id: str, session: PortalSession | None) -> list[dict[str, Any]]:
+    """Server-side decoy ledger: seeded base history plus this session's own recorded
+    transfer attempts, so the vault a diverted attacker sees stays identical across devices
+    and page reloads instead of resetting to whatever their browser's localStorage remembers."""
+    history = _decoy_transaction_base_history(user_id)
+    if session is not None:
+        for index, attempt in enumerate(session.transfer_attempts):
+            history.append(
+                {
+                    "id": f"live-{session.session_id}-{index}",
+                    "date": datetime.fromtimestamp(
+                        float(attempt.get("timestamp", time.time())), tz=timezone.utc
+                    ).isoformat(),
+                    "description": str(attempt.get("destination") or "Transfer"),
+                    "amount": -abs(float(attempt.get("amount", 0.0))),
+                }
+            )
+    return sorted(history, key=lambda item: item["date"], reverse=True)[:10]
+
+
+def _decoy_account(user_id: str, account: dict[str, Any] | None, session: PortalSession | None = None) -> dict[str, Any]:
+    """Stable, believable decoy balance and transaction history for a sandboxed session;
+    never the real account data."""
     digest = hashlib.sha256(f"decoy:{user_id}".encode("utf-8")).digest()
     balance = 48_000 + int.from_bytes(digest[:3], "big") % 140_000 + (digest[3] % 100) / 100
     masked = account["account_masked"] if account else f"****{int.from_bytes(digest[4:6], 'big') % 10000:04d}"
-    return {"balance": round(balance, 2), "accountMasked": masked}
+    return {
+        "balance": round(balance, 2),
+        "accountMasked": masked,
+        "transactions": _decoy_transactions_for_session(user_id, session),
+    }
 
 
 def _activate_sandbox(response: Response, session: PortalSession, user_id: str, source_ip: str) -> dict[str, Any]:
@@ -3226,7 +3300,7 @@ def bank_login(request: BankLoginRequest, response: Response) -> dict[str, Any]:
         "next": "/dashboard" if (sandbox or authenticated) else "/login",
     }
     if sandbox:
-        payload["account"] = _decoy_account(user_id, account)
+        payload["account"] = _decoy_account(user_id, account, session)
     elif account and authenticated:
         payload["account"] = {
             "balance": account["balance"],
@@ -3253,9 +3327,12 @@ def bank_transfer(request: BankTransferRequest, response: Response) -> dict[str,
 
     status = "accepted"
     message = "Transfer authorized"
+    account_payload = None
     if sandbox:
-        # The decoy vault confirms the transfer; nothing leaves the sandbox.
+        # The decoy vault confirms the transfer; nothing leaves the sandbox. Re-derive the
+        # decoy ledger so it now includes this transfer, server-side, before responding.
         status = "accepted"
+        account_payload = _decoy_account(request.user_id, None, session)
     elif verdict.verdict != "LEGITIMATE" or request.amount >= 10000:
         status = "suspicious"
         message = "Transfer pending manual review."
@@ -3267,6 +3344,7 @@ def bank_transfer(request: BankTransferRequest, response: Response) -> dict[str,
         "confidence": verdict.confidence,
         "sandbox": sandbox,
         "message": message,
+        "account": account_payload,
     }
 
 
