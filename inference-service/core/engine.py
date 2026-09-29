@@ -599,6 +599,34 @@ class DecisionEngine:
             log.warning("Failed to hot-swap model version %s: %s", new_version, exc)
             return False
 
+    def force_activate_manifest(self, payload: dict[str, Any]) -> bool:
+        """Unconditionally activate every model artifact referenced by payload.
+
+        Used by explicit admin actions (model promotion, rollback) where the F1-regression
+        guard in check_model_version() would be wrong: a rollback target's recorded F1 can be
+        lower than whatever bad candidate is currently active, and that is exactly the point.
+        The decision to accept this manifest was already made by the human who approved it.
+        """
+        new_version = str(payload.get("version", "0.0.0"))
+        new_validation_f1 = dict(payload.get("validation_f1", {}))
+        try:
+            with self._lock:
+                snn_path = self._resolve_artifact_path(payload.get("snn"))
+                if snn_path is not None:
+                    self.snn_encoder, self.snn_model = self._load_snn_bundle(snn_path)
+                lnn_path = self._resolve_artifact_path(payload.get("lnn"))
+                if lnn_path is not None:
+                    self.lnn_reservoir, self.lnn_classifier, self.lnn_window_size = self._load_lnn_bundle(lnn_path)
+                xgb_path = self._resolve_artifact_path(payload.get("xgb"))
+                if xgb_path is not None:
+                    self.xgb_model = self._load_xgb_bundle(xgb_path)
+                self.current_model_version = new_version
+                self.current_validation_f1 = new_validation_f1
+            return True
+        except Exception as exc:
+            log.warning("Failed to force-activate manifest version %s: %s", new_version, exc)
+            return False
+
     def start_model_monitor(self) -> None:
         if self._monitor_thread is not None and self._monitor_thread.is_alive():
             return

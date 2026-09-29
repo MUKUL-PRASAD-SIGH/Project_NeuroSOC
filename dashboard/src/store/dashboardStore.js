@@ -1,9 +1,13 @@
 import { create } from "zustand";
 import {
   getAlerts,
+  getModelCandidates,
   getModelVersion,
   getStats,
   MAX_ALERTS,
+  promoteModelCandidate,
+  rejectModelCandidate,
+  rollbackModel,
   subscribeToAlerts,
 } from "../services/dashboardApi";
 
@@ -60,6 +64,12 @@ export const useDashboardStore = create((set, get) => ({
   alerts: {
     items: [],
     status: "idle",
+    loading: false,
+    error: null,
+    lastUpdated: null,
+  },
+  modelCandidates: {
+    items: [],
     loading: false,
     error: null,
     lastUpdated: null,
@@ -140,6 +150,33 @@ export const useDashboardStore = create((set, get) => ({
         },
       }));
     }
+  },
+
+  fetchModelCandidates: async () => {
+    set((state) => ({ modelCandidates: { ...state.modelCandidates, loading: true, error: null } }));
+    try {
+      const items = await getModelCandidates();
+      set((state) => ({
+        modelCandidates: { ...state.modelCandidates, items, loading: false, error: null, lastUpdated: Date.now() },
+      }));
+    } catch (error) {
+      set((state) => ({ modelCandidates: { ...state.modelCandidates, loading: false, error: error.message } }));
+    }
+  },
+
+  promoteCandidate: async (candidateId) => {
+    await promoteModelCandidate(candidateId);
+    await Promise.all([get().fetchModelCandidates(), get().fetchModelStatus()]);
+  },
+
+  rejectCandidate: async (candidateId) => {
+    await rejectModelCandidate(candidateId);
+    await get().fetchModelCandidates();
+  },
+
+  rollbackActiveModel: async () => {
+    await rollbackModel();
+    await Promise.all([get().fetchModelCandidates(), get().fetchModelStatus()]);
   },
 
   hydrateAlerts: async () => {

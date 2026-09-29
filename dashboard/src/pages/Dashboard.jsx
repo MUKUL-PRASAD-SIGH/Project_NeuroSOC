@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import AlertFeed from "../components/AlertFeed";
 import IngestionWorkbench from "../components/IngestionWorkbench";
+import ModelCandidatesPanel from "../components/ModelCandidatesPanel";
 import ModelStatusCard from "../components/ModelStatusCard";
 import PageTabs from "../components/PageTabs";
 import StatsBar from "../components/StatsBar";
@@ -74,6 +75,7 @@ export default function DashboardPage() {
         {activeTab === "model-health" ? (
           <div className="max-w-3xl">
             <ModelStatusCard />
+            <ModelCandidatesPanel />
           </div>
         ) : null}
 

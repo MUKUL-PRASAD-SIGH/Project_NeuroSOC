@@ -6,6 +6,7 @@ import ipaddress
 import logging
 import os
 import re
+import tempfile
 import threading
 import time
 import uuid
@@ -178,6 +179,8 @@ ALERTS_TOPIC = os.getenv("ALERTS_TOPIC", "alerts")
 GROUP_ID = os.getenv("INFERENCE_GROUP_ID", "inference-service")
 MODEL_DIR = _resolve_model_dir()
 MODEL_VERSION_PATH = Path(os.getenv("MODEL_VERSION_FILE", str(MODEL_DIR / "model_version.json")))
+MODEL_CANDIDATES_DIR = MODEL_VERSION_PATH.parent / "candidates"
+MODEL_HISTORY_DIR = MODEL_VERSION_PATH.parent / "history"
 MODEL_POLL_SECONDS = float(os.getenv("MODEL_POLL_SECONDS", "60"))
 CONSUMER_RETRY_SECONDS = float(os.getenv("CONSUMER_RETRY_SECONDS", "5"))
 LATEST_VERDICTS_LIMIT = int(os.getenv("LATEST_VERDICTS_LIMIT", "200"))
@@ -561,6 +564,34 @@ class SandboxReplayResponse(StrictResponseModel):
 class ModelReloadResponse(StrictResponseModel):
     reloaded: StrictBool
     active_model_version: StrictStr
+
+
+class ModelCandidateResponse(StrictResponseModel):
+    candidateId: StrictStr
+    status: StrictStr
+    modelKey: StrictStr
+    baseModelVersion: StrictStr
+    proposedVersion: StrictStr
+    validationF1: FiniteFloat
+    metrics: dict[str, Any]
+    createdAt: StrictStr
+    promotedAt: StrictStr | None = None
+    promotedBy: StrictStr | None = None
+    rejectedAt: StrictStr | None = None
+    rejectedBy: StrictStr | None = None
+
+
+class ModelPromotionResponse(StrictResponseModel):
+    candidateId: StrictStr
+    status: StrictStr
+    activeModelVersion: StrictStr
+    reloaded: StrictBool
+
+
+class ModelRollbackResponse(StrictResponseModel):
+    restoredVersion: StrictStr
+    activeModelVersion: StrictStr
+    reloaded: StrictBool
 
 
 class ProfileResponse(StrictResponseModel):
@@ -2290,6 +2321,93 @@ def _current_model_payload() -> dict[str, Any]:
     }
 
 
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+        temp_path = Path(handle.name)
+    temp_path.replace(path)
+
+
+def _write_history_snapshot(payload: dict[str, Any]) -> str:
+    MODEL_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+    version = str(payload.get("version", "0.0.0")).replace("/", "_")
+    filename = f"{timestamp}_{version}.json"
+    _atomic_write_json(MODEL_HISTORY_DIR / filename, payload)
+    return filename
+
+
+def _latest_history_snapshot() -> tuple[str, dict[str, Any]] | None:
+    if not MODEL_HISTORY_DIR.exists():
+        return None
+    snapshots = sorted(MODEL_HISTORY_DIR.glob("*.json"), reverse=True)
+    if not snapshots:
+        return None
+    latest = snapshots[0]
+    return latest.name, json.loads(latest.read_text(encoding="utf-8-sig"))
+
+
+def _pop_latest_history_snapshot() -> tuple[str, dict[str, Any]] | None:
+    found = _latest_history_snapshot()
+    if found is None:
+        return None
+    name, payload = found
+    (MODEL_HISTORY_DIR / name).unlink(missing_ok=True)
+    return name, payload
+
+
+def _candidate_manifest_path(candidate_id: str) -> Path:
+    safe_id = re.sub(r"[^A-Za-z0-9_.-]", "", candidate_id)
+    return MODEL_CANDIDATES_DIR / f"{safe_id}.manifest.json"
+
+
+def _load_candidate_manifest(candidate_id: str) -> dict[str, Any] | None:
+    path = _candidate_manifest_path(candidate_id)
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
+def _save_candidate_manifest(candidate: dict[str, Any]) -> None:
+    _atomic_write_json(_candidate_manifest_path(candidate["candidate_id"]), candidate)
+
+
+def _list_candidate_manifests() -> list[dict[str, Any]]:
+    if not MODEL_CANDIDATES_DIR.exists():
+        return []
+    manifests = []
+    for path in MODEL_CANDIDATES_DIR.glob("*.manifest.json"):
+        try:
+            manifests.append(json.loads(path.read_text(encoding="utf-8-sig")))
+        except (json.JSONDecodeError, OSError) as exc:
+            log.warning("Skipping unreadable candidate manifest %s: %s", path, exc)
+    manifests.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
+    return manifests
+
+
+def _format_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "candidateId": candidate["candidate_id"],
+        "status": candidate["status"],
+        "modelKey": candidate["model_key"],
+        "baseModelVersion": candidate["base_model_version"],
+        "proposedVersion": candidate["proposed_version"],
+        "validationF1": float(candidate["validation_f1"]),
+        "metrics": candidate.get("metrics", {}),
+        "createdAt": candidate["created_at"],
+        "promotedAt": candidate.get("promoted_at"),
+        "promotedBy": candidate.get("promoted_by"),
+        "rejectedAt": candidate.get("rejected_at"),
+        "rejectedBy": candidate.get("rejected_by"),
+    }
+
+
+def _actor_from_request(request: Request) -> str:
+    identity = getattr(request.state, "identity", None) or {}
+    return str(identity.get("username") or identity.get("user_id") or "anonymous-admin")
+
+
 def _session_snapshot(identifier: str, session_id: str | None, source_ip: str) -> PortalSession:
     session = portal_state.get_session(identifier=identifier, session_id=session_id)
     if session is not None:
@@ -2870,6 +2988,130 @@ def reload_models(request: Request) -> dict[str, Any]:
     return {
         "reloaded": swapped,
         "active_model_version": active_version,
+    }
+
+
+@app.get("/api/v1/models/candidates", response_model=list[ModelCandidateResponse])
+def list_model_candidates() -> list[dict[str, Any]]:
+    return [_format_candidate(candidate) for candidate in _list_candidate_manifests()]
+
+
+@app.post("/api/v1/models/candidates/{candidate_id}/promote", response_model=ModelPromotionResponse)
+def promote_model_candidate(candidate_id: str, request: Request) -> dict[str, Any]:
+    candidate = _load_candidate_manifest(candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="Candidate not found.")
+    if candidate.get("status") != "pending_approval":
+        raise HTTPException(status_code=409, detail=f"Candidate is already {candidate.get('status')}.")
+
+    current_payload = runtime.engine._read_model_version()
+    _write_history_snapshot(current_payload)
+
+    new_payload = dict(current_payload)
+    new_payload["version"] = candidate["proposed_version"]
+    new_payload[candidate["model_key"]] = candidate["artifact_path"]
+    validation_f1 = dict(new_payload.get("validation_f1") or {})
+    validation_f1[candidate["model_key"]] = candidate["validation_f1"]
+    new_payload["validation_f1"] = validation_f1
+    new_payload["timestamp"] = datetime.now(timezone.utc).isoformat()
+    _atomic_write_json(MODEL_VERSION_PATH, new_payload)
+
+    reloaded = runtime.engine.force_activate_manifest(new_payload)
+
+    actor_id = _actor_from_request(request)
+    actor_roles = list((getattr(request.state, "identity", None) or {}).get("roles", []))
+    candidate["status"] = "promoted"
+    candidate["promoted_at"] = datetime.now(timezone.utc).isoformat()
+    candidate["promoted_by"] = actor_id
+    _save_candidate_manifest(candidate)
+
+    _record_security_audit_event(
+        _new_security_audit_event(
+            "security.model_promotion",
+            "succeeded",
+            route="/api/models/candidates/{candidate_id}/promote",
+            http_method="POST",
+            actor_id=actor_id,
+            actor_roles=actor_roles,
+            resource_id=candidate_id,
+            details={
+                "model_key": candidate["model_key"],
+                "new_version": candidate["proposed_version"],
+                "reloaded": reloaded,
+            },
+        )
+    )
+
+    return {
+        "candidateId": candidate_id,
+        "status": "promoted",
+        "activeModelVersion": str(runtime.engine.current_model_version),
+        "reloaded": reloaded,
+    }
+
+
+@app.post("/api/v1/models/candidates/{candidate_id}/reject", response_model=ModelCandidateResponse)
+def reject_model_candidate(candidate_id: str, request: Request) -> dict[str, Any]:
+    candidate = _load_candidate_manifest(candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="Candidate not found.")
+    if candidate.get("status") != "pending_approval":
+        raise HTTPException(status_code=409, detail=f"Candidate is already {candidate.get('status')}.")
+
+    actor_id = _actor_from_request(request)
+    actor_roles = list((getattr(request.state, "identity", None) or {}).get("roles", []))
+    candidate["status"] = "rejected"
+    candidate["rejected_at"] = datetime.now(timezone.utc).isoformat()
+    candidate["rejected_by"] = actor_id
+    _save_candidate_manifest(candidate)
+
+    _record_security_audit_event(
+        _new_security_audit_event(
+            "security.model_rejection",
+            "succeeded",
+            route="/api/models/candidates/{candidate_id}/reject",
+            http_method="POST",
+            actor_id=actor_id,
+            actor_roles=actor_roles,
+            resource_id=candidate_id,
+            details={"model_key": candidate["model_key"]},
+        )
+    )
+
+    return _format_candidate(candidate)
+
+
+@app.post("/api/v1/models/rollback", response_model=ModelRollbackResponse)
+def rollback_model(request: Request) -> dict[str, Any]:
+    snapshot = _pop_latest_history_snapshot()
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="No previous model version to roll back to.")
+    _snapshot_name, restored_payload = snapshot
+
+    _atomic_write_json(MODEL_VERSION_PATH, restored_payload)
+    reloaded = runtime.engine.force_activate_manifest(restored_payload)
+
+    actor_id = _actor_from_request(request)
+    actor_roles = list((getattr(request.state, "identity", None) or {}).get("roles", []))
+    _record_security_audit_event(
+        _new_security_audit_event(
+            "security.model_rollback",
+            "succeeded",
+            route="/api/models/rollback",
+            http_method="POST",
+            actor_id=actor_id,
+            actor_roles=actor_roles,
+            details={
+                "restored_version": str(restored_payload.get("version")),
+                "reloaded": reloaded,
+            },
+        )
+    )
+
+    return {
+        "restoredVersion": str(restored_payload.get("version")),
+        "activeModelVersion": str(runtime.engine.current_model_version),
+        "reloaded": reloaded,
     }
 
 

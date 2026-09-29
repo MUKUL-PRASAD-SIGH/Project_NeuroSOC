@@ -140,6 +140,29 @@ export async function getSandboxReplay(sessionId) {
   }
 }
 
+export async function getModelCandidates() {
+  if (USE_MOCKS) {
+    return [];
+  }
+  const { data } = await apiClient.get("/api/v1/models/candidates");
+  return Array.isArray(data) ? data : [];
+}
+
+export async function promoteModelCandidate(candidateId) {
+  const { data } = await apiClient.post(`/api/v1/models/candidates/${encodeURIComponent(candidateId)}/promote`);
+  return data;
+}
+
+export async function rejectModelCandidate(candidateId) {
+  const { data } = await apiClient.post(`/api/v1/models/candidates/${encodeURIComponent(candidateId)}/reject`);
+  return data;
+}
+
+export async function rollbackModel() {
+  const { data } = await apiClient.post("/api/v1/models/rollback");
+  return data;
+}
+
 export async function submitAlertDecision(sessionId, decision, notes) {
   if (USE_MOCKS || !sessionId) {
     return {
