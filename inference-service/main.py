@@ -205,6 +205,15 @@ SANDBOX_TIMEOUT_SECONDS = int(os.getenv("SANDBOX_TIMEOUT_SEC", "300"))
 PORTAL_SESSION_TTL_SECONDS = int(os.getenv("PORTAL_SESSION_TTL_SECONDS", "1800"))
 APP_STARTED_AT = time.time()
 
+ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL", "").strip()
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+SMTP_PORT = _read_positive_int_env("SMTP_PORT", "587")
+SMTP_USER = os.getenv("SMTP_USER", "").strip()
+SMTP_PASS = os.getenv("SMTP_PASS", "")
+REPORT_EMAIL = os.getenv("REPORT_EMAIL", "").strip()
+REPORT_TIME = os.getenv("REPORT_TIME", "06:00").strip()
+DIGEST_POLL_SECONDS = _read_positive_int_env("DIGEST_POLL_SECONDS", "60")
+
 SQLI_PATTERN = re.compile(r"(union\s+select|or\s+1\s*=\s*1|--|/\*|drop\s+table|insert\s+into)", re.IGNORECASE)
 BEHAVIOR_DIMENSIONS = [
     "Velocity",
@@ -1538,6 +1547,77 @@ def _location_label_for_ip(source_ip: str | None) -> str:
     return label
 
 
+def _send_webhook_notification(alert_payload: dict[str, Any]) -> None:
+    """Best-effort push of a high-severity alert to a Slack/Discord/Teams-compatible webhook.
+
+    Never raises: a notification-provider outage must not affect detection or the API response.
+    """
+    if not ALERT_WEBHOOK_URL:
+        return
+    text = (
+        f":rotating_light: NeuroSOC alert: {alert_payload.get('verdict', 'HACKER')} "
+        f"({alert_payload.get('xgb_class', 'unknown')}) from {alert_payload.get('source_ip', 'unknown')} "
+        f"· confidence {float(alert_payload.get('confidence', 0.0)) * 100:.0f}% "
+        f"· session {alert_payload.get('session_id', 'unknown')}"
+    )
+    # "text" is the Slack incoming-webhook convention; "content" is Discord's. Sending both
+    # covers the common local/self-hosted webhook targets without provider-specific branching.
+    body = json.dumps({"text": text, "content": text}).encode("utf-8")
+    try:
+        request = urllib_request.Request(
+            ALERT_WEBHOOK_URL,
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib_request.urlopen(request, timeout=3.0):
+            pass
+    except (urllib_error.URLError, TimeoutError, OSError) as exc:
+        log.warning("Alert webhook delivery failed: %s", exc)
+
+
+def _build_digest_email_body(alert_rows: list[dict[str, Any]]) -> str:
+    if not alert_rows:
+        return "No high-confidence alerts were recorded in the last 24 hours."
+    lines = [f"NeuroSOC morning digest -- {len(alert_rows)} alert(s) in the last 24 hours:", ""]
+    for row in alert_rows[:25]:
+        lines.append(
+            f"- {row.get('created_at', row.get('timestamp', 'unknown time'))}: "
+            f"{row.get('verdict', 'HACKER')} from {row.get('source_ip', 'unknown')} "
+            f"(user {row.get('user_id', 'unknown')}, confidence {float(row.get('confidence', 0.0)) * 100:.0f}%)"
+        )
+    if len(alert_rows) > 25:
+        lines.append(f"... and {len(alert_rows) - 25} more.")
+    return "\n".join(lines)
+
+
+def _send_digest_email(body: str) -> bool:
+    """Best-effort morning digest send. Returns False (and logs) on any failure."""
+    if not (SMTP_HOST and REPORT_EMAIL):
+        return False
+    try:
+        from email.mime.text import MIMEText
+        import smtplib
+
+        message = MIMEText(body)
+        message["Subject"] = "NeuroSOC morning digest"
+        message["From"] = SMTP_USER or "neurosoc@localhost"
+        message["To"] = REPORT_EMAIL
+
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as smtp:
+            smtp.ehlo()
+            if smtp.has_extn("STARTTLS"):
+                smtp.starttls()
+                smtp.ehlo()
+            if SMTP_USER and SMTP_PASS:
+                smtp.login(SMTP_USER, SMTP_PASS)
+            smtp.sendmail(message["From"], [REPORT_EMAIL], message.as_string())
+        return True
+    except Exception as exc:
+        log.warning("Digest email delivery failed: %s", exc)
+        return False
+
+
 def _severity_for_verdict(verdict: str, confidence: float) -> str:
     if verdict == "HACKER" or confidence >= 0.8:
         return "high"
@@ -1871,6 +1951,8 @@ class InferenceRuntime:
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._consumer_thread: threading.Thread | None = None
+        self._digest_thread: threading.Thread | None = None
+        self._last_digest_date: str | None = None
         self._producer: KafkaProducer | None = None
         self._consumer_connected = False
         self._producer_connected = False
@@ -1901,13 +1983,40 @@ class InferenceRuntime:
                 daemon=True,
             )
             self._consumer_thread.start()
+        if SMTP_HOST and REPORT_EMAIL and (self._digest_thread is None or not self._digest_thread.is_alive()):
+            self._digest_thread = threading.Thread(target=self._digest_loop, name="inference-digest", daemon=True)
+            self._digest_thread.start()
         log.info("Inference runtime started.")
+
+    def _digest_loop(self) -> None:
+        while not self._stop_event.wait(DIGEST_POLL_SECONDS):
+            try:
+                self._maybe_send_daily_digest()
+            except Exception as exc:
+                log.warning("Digest scheduler iteration failed: %s", exc)
+
+    def _maybe_send_daily_digest(self) -> None:
+        now = datetime.now(timezone.utc)
+        today = now.strftime("%Y-%m-%d")
+        if self._last_digest_date == today:
+            return
+        if now.strftime("%H:%M") < REPORT_TIME:
+            return
+        alert_rows = self.repository.latest_alert_rows(limit=200)
+        if not alert_rows:
+            alert_rows = self.latest_alerts(200)
+        body = _build_digest_email_body(alert_rows)
+        if _send_digest_email(body):
+            self._last_digest_date = today
+            log.info("Sent morning digest covering %d alert(s).", len(alert_rows))
 
     def stop(self) -> None:
         self._stop_event.set()
         self.engine.stop_model_monitor()
         if self._consumer_thread is not None:
             self._consumer_thread.join(timeout=2.0)
+        if self._digest_thread is not None:
+            self._digest_thread.join(timeout=2.0)
         if self._producer is not None:
             self._producer.close(timeout=2)
         self._producer = None
@@ -2058,6 +2167,8 @@ class InferenceRuntime:
                     )
             except Exception as e:
                 log.warning("WebSocket broadcast failed: %s", e)
+            if _severity_for_verdict(verdict.verdict, verdict.confidence) == "high":
+                _send_webhook_notification(alert_payload)
         return verdict
 
     def _handle_feature_message(self, payload: dict[str, Any]) -> ThreatVerdict:
