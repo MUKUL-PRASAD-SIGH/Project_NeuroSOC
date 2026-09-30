@@ -82,6 +82,18 @@ def test_browser_key_works_only_from_registered_origin(setup):
     assert missing.status_code == 401
 
 
+def test_beacon_style_simple_request_is_accepted(setup):
+    client, pk = setup["client"], setup["site"]["publishable_key"]
+    import json as _json
+    response = client.post(f"/api/v1/sdk/events?key={pk}", content=_json.dumps({"events": [_claim()]}),
+                           headers={"Content-Type": "text/plain;charset=UTF-8", "Origin": SITE_ORIGIN})
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == SITE_ORIGIN
+    garbage = client.post(f"/api/v1/sdk/events?key={pk}", content="not json",
+                          headers={"Content-Type": "text/plain", "Origin": SITE_ORIGIN})
+    assert garbage.status_code == 422
+
+
 def test_preflight_is_answered_for_registered_origins_only(setup):
     client = setup["client"]
     headers = {"Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type, x-neurosoc-key"}

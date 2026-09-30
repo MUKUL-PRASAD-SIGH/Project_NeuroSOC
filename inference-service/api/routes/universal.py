@@ -29,7 +29,7 @@ from typing import Any, Awaitable, Callable, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from core.universal.engine import UniversalEngine
 from core.universal.ingest import SdkBatch, SdkEvent, normalize, schema_view
@@ -154,9 +154,15 @@ def build_router(engine: UniversalEngine, registry: SiteRegistry, hooks: Univers
 
     # ── SDK routes ──────────────────────────────────────────────────────────
     @router.post("/api/v1/sdk/events")
-    async def sdk_events(batch: SdkBatch, request: Request,
+    async def sdk_events(request: Request, key: str | None = Query(default=None, max_length=128),
                          x_neurosoc_key: str | None = Header(default=None)) -> dict[str, Any]:
-        site, key_kind = site_for_key(x_neurosoc_key, request)
+        # Browsers send this as a CORS "simple request" (text/plain body, key in the query) so it
+        # needs no preflight and also works from navigator.sendBeacon when a page closes.
+        site, key_kind = site_for_key(x_neurosoc_key or key, request)
+        try:
+            batch = SdkBatch.model_validate_json(await request.body())
+        except ValidationError:
+            raise HTTPException(status_code=422, detail="Request validation failed.") from None
         source = "sdk-js" if key_kind == "pk" else "sdk-py"
         verdicts = [await score(raw, site, request, source) for raw in batch.events]
         if key_kind == "pk":
