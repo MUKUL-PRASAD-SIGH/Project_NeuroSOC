@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import ipaddress
 import logging
@@ -197,9 +198,27 @@ def _is_safe_production_database_url(value: str) -> bool:
     )
 
 
+def _is_safe_production_redis_url(value: str) -> bool:
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        _port = parsed.port
+        username = unquote(parsed.username or "").strip()
+        password = unquote(parsed.password or "")
+    except ValueError:
+        return False
+    if parsed.scheme != "rediss" or not hostname or not username or not password:
+        return False
+    credentials = f"{username} {password}"
+    return re.search(
+        r"(?:change[_-]?me|your[_-]?password)", credentials, re.IGNORECASE
+    ) is None
+
+
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
+RATE_LIMIT_HASH_SECRET = os.getenv("RATE_LIMIT_HASH_SECRET", "")
 INPUT_TOPIC = os.getenv("INFERENCE_INPUT_TOPIC", "extracted-features")
 VERDICTS_TOPIC = os.getenv("VERDICTS_TOPIC", "verdicts")
 ALERTS_TOPIC = os.getenv("ALERTS_TOPIC", "alerts")
@@ -754,20 +773,68 @@ class RequestBodyLimitMiddleware:
         await self.app(scope, replay_body, send)
 
 
+class RateLimitBackendUnavailable(RuntimeError):
+    """Raised when shared rate limiting cannot reach its Redis backend."""
+
+
 class FixedWindowRateLimiter:
-    def __init__(self, limit: int, window_seconds: int = 60, max_clients: int = 10_000) -> None:
+    _REDIS_INCREMENT_SCRIPT = """
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return count
+"""
+
+    def __init__(
+        self,
+        limit: int,
+        window_seconds: int = 60,
+        max_clients: int = 10_000,
+        redis_client: Any | None = None,
+        fail_closed: bool = False,
+        key_prefix: str = "neurosoc:api-rate-limit",
+        key_secret: str = "",
+    ) -> None:
         self.limit = limit
         self.window_seconds = window_seconds
         self.max_clients = max_clients
+        self.redis_client = redis_client
+        self.fail_closed = fail_closed
+        self.key_prefix = key_prefix
+        self.key_secret = key_secret.encode("utf-8") or b"local-only-rate-limit-key"
         self._windows: OrderedDict[str, tuple[float, int]] = OrderedDict()
         self._lock = threading.Lock()
+        self._redis_warning_logged = False
 
     def clear(self) -> None:
         with self._lock:
             self._windows.clear()
 
     def check(self, client_key: str, now: float | None = None) -> int | None:
-        now = time.monotonic() if now is None else now
+        if self.redis_client is not None:
+            wall_time = time.time() if now is None else now
+            bucket = int(wall_time // self.window_seconds)
+            subject_hash = hmac.new(self.key_secret, client_key.encode("utf-8"), hashlib.sha256).hexdigest()
+            redis_key = f"{self.key_prefix}:{bucket}:{subject_hash}"
+            ttl = max(1, int(self.window_seconds - (wall_time % self.window_seconds)) + 1)
+            try:
+                count = int(self.redis_client.eval(self._REDIS_INCREMENT_SCRIPT, 1, redis_key, ttl))
+            except Exception as exc:
+                if self.fail_closed:
+                    raise RateLimitBackendUnavailable("Shared rate limiting is unavailable.") from exc
+                if not self._redis_warning_logged:
+                    log.warning("Redis rate limiting is unavailable; falling back to process-local limits.")
+                    self._redis_warning_logged = True
+                return self._check_local(client_key, time.monotonic() if now is None else now)
+
+            if count > self.limit:
+                return max(1, int(self.window_seconds - (wall_time % self.window_seconds) + 0.999))
+            return None
+
+        return self._check_local(client_key, time.monotonic() if now is None else now)
+
+    def _check_local(self, client_key: str, now: float) -> int | None:
         with self._lock:
             existing = self._windows.get(client_key)
             if existing is None:
@@ -791,11 +858,10 @@ class FixedWindowRateLimiter:
 
 
 def _build_redis_client() -> Any | None:
-    """Best-effort Redis client for portal-session durability.
+    """Construct the Redis client used for portal durability and API rate limits.
 
-    Absent REDIS_URL, or if the package/connection is unavailable, this returns None and
-    PortalState falls back to pure in-memory sessions -- restarts lose state, exactly like
-    before this feature existed, rather than the process failing to start.
+    Local/test may omit Redis and keep process-local behavior. Shared deployments validate
+    TLS, credentials, and connectivity during application startup.
     """
     if not REDIS_URL:
         return None
@@ -806,6 +872,9 @@ def _build_redis_client() -> Any | None:
     except Exception as exc:
         log.warning("Redis client could not be constructed from REDIS_URL: %s", exc)
         return None
+
+
+REDIS_CLIENT = _build_redis_client()
 
 
 _PORTAL_SESSION_SET_FIELDS = ("known_aliases", "login_passwords")
@@ -1690,7 +1759,7 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
-portal_state = PortalState(redis_client=_build_redis_client())
+portal_state = PortalState(redis_client=REDIS_CLIENT)
 sandbox_gateway = SandboxGateway(SANDBOX_BASE_URL, SANDBOX_SERVICE_TOKEN) if SANDBOX_BASE_URL else None
 
 
@@ -2643,6 +2712,11 @@ async def lifespan(_: FastAPI):
         yield
     finally:
         runtime.stop()
+        if REDIS_CLIENT is not None:
+            try:
+                REDIS_CLIENT.close()
+            except Exception as exc:
+                log.warning("Could not close Redis client cleanly: %s", type(exc).__name__)
 
 
 app = FastAPI(title="NeuroShield Inference Service", version="0.9.0", lifespan=lifespan)
@@ -2656,7 +2730,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-rate_limiter = FixedWindowRateLimiter(API_RATE_LIMIT_PER_MINUTE)
+rate_limiter = FixedWindowRateLimiter(
+    API_RATE_LIMIT_PER_MINUTE,
+    redis_client=REDIS_CLIENT,
+    fail_closed=APP_ENV in {"staging", "production"},
+    key_secret=RATE_LIMIT_HASH_SECRET,
+)
 
 
 @app.exception_handler(RequestValidationError)
@@ -2713,6 +2792,17 @@ def _validate_startup_configuration() -> None:
 
     if APP_ENV not in {"staging", "production"}:
         return
+
+    if not _is_safe_production_redis_url(REDIS_URL):
+        raise RuntimeError("Staging and production require a credentialed rediss:// REDIS_URL.")
+    if len(RATE_LIMIT_HASH_SECRET) < 32:
+        raise RuntimeError("Staging and production require RATE_LIMIT_HASH_SECRET with at least 32 characters.")
+    if REDIS_CLIENT is None:
+        raise RuntimeError("Staging and production require a configured Redis client.")
+    try:
+        REDIS_CLIENT.ping()
+    except Exception:
+        raise RuntimeError("Staging and production require reachable Redis for shared API rate limiting.") from None
 
     if not OIDC_REQUIRED or not OIDC_ISSUER:
         raise RuntimeError("Staging and production require OIDC_REQUIRED=true and OIDC_ISSUER.")
@@ -3062,7 +3152,14 @@ async def api_key_middleware(request: Request, call_next):
 
     if not _api_key_exempt(canonical_path):
         client_host = request.client.host if request.client is not None else "unknown"
-        retry_after = rate_limiter.check(client_host)
+        try:
+            retry_after = await asyncio.to_thread(rate_limiter.check, client_host)
+        except RateLimitBackendUnavailable:
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content=ErrorResponse(detail="Rate limiting is temporarily unavailable.").model_dump(),
+                headers={"Retry-After": "5"},
+            )
         if retry_after is not None:
             return JSONResponse(
                 status_code=429,

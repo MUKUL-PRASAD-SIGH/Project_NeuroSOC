@@ -193,7 +193,8 @@ services:
       KAFKA_SASL_PASSWORD: ${INFERENCE_KAFKA_SASL_PASSWORD:-}
       KAFKA_SSL_CA_LOCATION: ${KAFKA_SSL_CA_LOCATION:-/etc/ssl/certs/ca-certificates.crt}
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in your .env file (see .env.example)}
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      RATE_LIMIT_HASH_SECRET: ${RATE_LIMIT_HASH_SECRET:-}
       MODEL_PATH: /models
       FEATURE_COLUMNS_PATH: /data/feature_columns.txt
       SANDBOX_CONFIDENCE_THRESHOLD: "0.50"

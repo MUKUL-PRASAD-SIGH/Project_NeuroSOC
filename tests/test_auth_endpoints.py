@@ -177,6 +177,58 @@ def test_rate_limit_returns_retry_after_header(protected_client, monkeypatch):
     assert limited.json()["detail"] == "Rate limit exceeded."
 
 
+def test_rate_limit_uses_atomic_shared_redis_counters_across_replicas():
+    class SharedRedis:
+        def __init__(self):
+            self.values = {}
+            self.keys = []
+
+        def eval(self, script, key_count, key, ttl):
+            assert key_count == 1
+            assert "INCR" in script and "EXPIRE" in script
+            assert 1 <= ttl <= 61
+            self.keys.append(key)
+            self.values[key] = self.values.get(key, 0) + 1
+            return self.values[key]
+
+    redis_backend = SharedRedis()
+    limiter_a = inference_main.FixedWindowRateLimiter(
+        2, redis_client=redis_backend, key_secret="shared-test-key" * 3
+    )
+    limiter_b = inference_main.FixedWindowRateLimiter(
+        2, redis_client=redis_backend, key_secret="shared-test-key" * 3
+    )
+    assert limiter_a.check("203.0.113.7", now=120.25) is None
+    assert limiter_b.check("203.0.113.7", now=120.25) is None
+    assert limiter_a.check("203.0.113.7", now=120.25) == 60
+    assert len(set(redis_backend.keys)) == 1
+    assert "203.0.113.7" not in redis_backend.keys[0]
+
+
+def test_shared_rate_limiter_fails_closed_when_redis_is_unavailable(protected_client, monkeypatch):
+    class OfflineRedis:
+        def eval(self, *_args):
+            raise ConnectionError("offline")
+
+    monkeypatch.setattr(inference_main.rate_limiter, "redis_client", OfflineRedis())
+    monkeypatch.setattr(inference_main.rate_limiter, "fail_closed", True)
+    response = protected_client.get("/api/v1/stats", headers={"Authorization": "Bearer analyst"})
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "5"
+    assert response.json()["detail"] == "Rate limiting is temporarily unavailable."
+
+
+def test_local_rate_limiter_falls_back_to_process_window_when_redis_is_unavailable():
+    class OfflineRedis:
+        def eval(self, *_args):
+            raise ConnectionError("offline")
+
+    limiter = inference_main.FixedWindowRateLimiter(1, redis_client=OfflineRedis())
+    assert limiter.check("127.0.0.1", now=100.0) is None
+    assert limiter.check("127.0.0.1", now=101.0) == 59
+
+
 def test_cors_preflight_reaches_cors_middleware_without_bearer_token(protected_client):
     response = protected_client.options(
         "/api/v1/stats",
@@ -702,6 +754,18 @@ def configure_valid_production_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("KAFKA_SASL_USERNAME", "inference-service")
     monkeypatch.setenv("KAFKA_SASL_PASSWORD", "test-kafka-password")
     monkeypatch.setenv("KAFKA_SSL_CA_LOCATION", str(kafka_ca))
+    monkeypatch.setattr(
+        inference_main,
+        "REDIS_URL",
+        "rediss://rate-limit-user:test-redis-password@redis.example.com:6379/0",
+    )
+    monkeypatch.setattr(inference_main, "RATE_LIMIT_HASH_SECRET", "h" * 32)
+
+    class AvailableRedis:
+        def ping(self):
+            return True
+
+    monkeypatch.setattr(inference_main, "REDIS_CLIENT", AvailableRedis())
     monkeypatch.setattr(inference_main, "APP_ENV", "production")
     monkeypatch.setattr(inference_main, "OIDC_REQUIRED", True)
     monkeypatch.setattr(inference_main, "OIDC_ISSUER", "https://identity.example.com/realms/neurosoc")
@@ -767,6 +831,34 @@ def test_production_startup_rejects_change_me_database_credentials(monkeypatch, 
     )
 
     with pytest.raises(RuntimeError, match="non-demo DATABASE_URL"):
+        inference_main._validate_startup_configuration()
+
+
+def test_production_startup_rejects_unsecured_redis(monkeypatch, tmp_path):
+    configure_valid_production_environment(monkeypatch, tmp_path)
+    monkeypatch.setattr(inference_main, "REDIS_URL", "redis://user:password@redis.example.com:6379/0")
+
+    with pytest.raises(RuntimeError, match="credentialed rediss:// REDIS_URL"):
+        inference_main._validate_startup_configuration()
+
+
+def test_production_startup_rejects_missing_rate_limit_hash_secret(monkeypatch, tmp_path):
+    configure_valid_production_environment(monkeypatch, tmp_path)
+    monkeypatch.setattr(inference_main, "RATE_LIMIT_HASH_SECRET", "short")
+
+    with pytest.raises(RuntimeError, match="RATE_LIMIT_HASH_SECRET"):
+        inference_main._validate_startup_configuration()
+
+
+def test_production_startup_rejects_unavailable_redis(monkeypatch, tmp_path):
+    configure_valid_production_environment(monkeypatch, tmp_path)
+
+    class OfflineRedis:
+        def ping(self):
+            raise ConnectionError("offline")
+
+    monkeypatch.setattr(inference_main, "REDIS_CLIENT", OfflineRedis())
+    with pytest.raises(RuntimeError, match="reachable Redis"):
         inference_main._validate_startup_configuration()
 
 
