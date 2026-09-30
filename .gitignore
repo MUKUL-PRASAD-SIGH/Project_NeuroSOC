@@ -52,7 +52,12 @@ models/tmp*
 artifacts/artifacts/
 
 # Demo, walkthrough and dev-only scripts
-dashboard/scripts/
+# (a bare directory pattern can't be re-included per-file by git, so this ignores
+# contents via the trailing /* instead of the directory itself)
+dashboard/scripts/*
+# ...except the production build guard vite.config.js imports at build time --
+# needed inside the Docker build context (see dashboard/vite.config.js).
+!dashboard/scripts/productionBuildGuard.mjs
 inference-service/*_demo.py
 inference-service/main_system.py
 inference-service/test_policy.py

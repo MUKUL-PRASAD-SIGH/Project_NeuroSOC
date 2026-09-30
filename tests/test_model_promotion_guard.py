@@ -118,6 +118,7 @@ def test_feedback_retraining_creates_candidate_without_promoting_or_reloading(tm
             {"training_rows": 2, "validation_rows": 1},
         ),
     )
+    monkeypatch.setattr(service, "_evaluate_on_holdout", lambda _wrapper: 0.85)
 
     result = service.run_once()
 

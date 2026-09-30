@@ -20,6 +20,7 @@ import logging
 from kafka import KafkaAdminClient
 from kafka.admin import NewTopic
 from kafka.errors import TopicAlreadyExistsError, NoBrokersAvailable
+from kafka_security import kafka_client_security_options
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,6 +29,8 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 KAFKA_BOOTSTRAP  = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
+APP_ENV = os.getenv("APP_ENV", "local").strip().lower()
+KAFKA_CLIENT_SECURITY_OPTIONS = kafka_client_security_options(APP_ENV)
 MAX_RETRIES      = int(os.getenv("KAFKA_SETUP_RETRIES", "10"))   # ↑ from 5
 RETRY_DELAY_SEC  = int(os.getenv("KAFKA_SETUP_DELAY", "15"))     # ↑ from 10
 
@@ -38,6 +41,26 @@ TOPICS: list[dict] = [
     {"name": "feedback",           "partitions": 1, "replication": 1},
     {"name": "alerts",             "partitions": 1, "replication": 1},
 ]
+
+
+def should_skip_runtime_topic_creation(
+    app_env: str = APP_ENV,
+    topics_preprovisioned: str | None = None,
+) -> bool:
+    """Require infrastructure-managed topic creation in shared deployments."""
+    if app_env not in {"staging", "production"}:
+        return False
+    configured = (
+        os.getenv("KAFKA_TOPICS_PREPROVISIONED", "false")
+        if topics_preprovisioned is None
+        else topics_preprovisioned
+    )
+    if configured.strip().lower() not in {"1", "true", "yes", "on"}:
+        raise RuntimeError(
+            "Shared deployments require Kafka topics to be provisioned by infrastructure; "
+            "set KAFKA_TOPICS_PREPROVISIONED=true after provisioning."
+        )
+    return True
 
 
 def create_topics(admin: KafkaAdminClient) -> None:
@@ -102,6 +125,9 @@ def create_topics(admin: KafkaAdminClient) -> None:
 
 def run() -> None:
     """Connect to Kafka with retries and create all topics."""
+    if should_skip_runtime_topic_creation():
+        log.info("Shared deployment: using infrastructure-provisioned Kafka topics.")
+        return
     log.info("Connecting to Kafka at %s  (max %d attempts, %ds gap)…",
              KAFKA_BOOTSTRAP, MAX_RETRIES, RETRY_DELAY_SEC)
 
@@ -109,6 +135,7 @@ def run() -> None:
         try:
             admin = KafkaAdminClient(
                 bootstrap_servers=KAFKA_BOOTSTRAP,
+                **KAFKA_CLIENT_SECURITY_OPTIONS,
                 client_id="neuroshield-setup",
                 request_timeout_ms=15_000,
             )

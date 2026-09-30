@@ -9,12 +9,16 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from kafka import KafkaProducer
+from kafka_security import kafka_client_security_options
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, generate_latest
 from pydantic import BaseModel, Field
 
 try:
@@ -41,8 +45,33 @@ SANDBOX_TIMEOUT_SEC = int(os.getenv("SANDBOX_TIMEOUT_SEC", "300"))
 HOST = os.getenv("SANDBOX_HOST", "0.0.0.0")
 PORT = int(os.getenv("SANDBOX_PORT", "8001"))
 FEEDBACK_TRIGGER_TOPIC = os.getenv("FEEDBACK_TRIGGER_TOPIC", "feedback-trigger")
+APP_ENV = os.getenv("APP_ENV", "local").strip().lower()
+KAFKA_CLIENT_SECURITY_OPTIONS = kafka_client_security_options(APP_ENV)
 
-EXEMPT_PATH_PREFIXES = ("/health", "/sessions")
+EXEMPT_PATH_PREFIXES = ("/health", "/metrics")
+SANDBOX_SERVICE_TOKEN = os.getenv("SANDBOX_SERVICE_TOKEN", "").strip()
+
+
+def _has_verified_postgres_tls(value: str) -> bool:
+    try:
+        query = parse_qs(urlsplit(value).query)
+    except ValueError:
+        return False
+    sslmode = (query.get("sslmode") or [os.getenv("PGSSLMODE", "")])[-1].strip().lower()
+    ca_path_value = (query.get("sslrootcert") or [os.getenv("PGSSLROOTCERT", "")])[-1].strip()
+    if sslmode != "verify-full" or not ca_path_value:
+        return False
+    ca_path = Path(ca_path_value).expanduser()
+    return ca_path.is_file() and os.access(ca_path, os.R_OK)
+
+SESSIONS_CREATED = Counter("neurosoc_sandbox_sessions_created_total", "Sandbox sessions created")
+SESSIONS_ACTIVE = Gauge("neurosoc_sandbox_sessions_active", "Currently active sandbox sessions")
+ACTIONS_LOGGED = Counter("neurosoc_sandbox_actions_total", "Actions captured inside the sandbox")
+HONEYPOT_HITS = Counter(
+    "neurosoc_sandbox_honeypot_hits_total",
+    "Honeypot/canary triggers observed inside the sandbox",
+    ["trigger_type"],
+)
 HONEYPOT_PATH_RULES: dict[str, tuple[str, str]] = {
     "/api/admin": ("HONEYPOT_ENDPOINT", "CRITICAL"),
     "/api/debug": ("HONEYPOT_ENDPOINT", "CRITICAL"),
@@ -98,6 +127,8 @@ class SandboxRepository:
     def _connect(self):
         if not self.database_url:
             raise RuntimeError("DATABASE_URL is required for the sandbox service.")
+        if APP_ENV in {"staging", "production"} and not _has_verified_postgres_tls(self.database_url):
+            raise RuntimeError("Shared deployments require PostgreSQL sslmode=verify-full and a readable server CA certificate.")
         if psycopg2 is None or RealDictCursor is None:
             raise RuntimeError("psycopg2 is required to persist sandbox activity.")
         return psycopg2.connect(self.database_url, cursor_factory=RealDictCursor)
@@ -327,6 +358,13 @@ class SandboxRepository:
                 )
         return dict(session)
 
+    def count_active_sessions(self) -> int:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) AS active FROM sandbox_sessions WHERE ended_at IS NULL")
+                row = cur.fetchone()
+        return int(row["active"]) if row else 0
+
     def expired_tokens(self, timeout_seconds: int) -> list[str]:
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -368,8 +406,13 @@ class SandboxManager:
     def start(self) -> None:
         self.repository.bootstrap()
         try:
+            SESSIONS_ACTIVE.set(self.repository.count_active_sessions())
+        except Exception as exc:
+            log.warning("Could not seed the active sandbox session gauge: %s", exc)
+        try:
             self._producer = KafkaProducer(
                 bootstrap_servers=KAFKA_BOOTSTRAP,
+                **KAFKA_CLIENT_SECURITY_OPTIONS,
                 value_serializer=lambda payload: json.dumps(payload).encode("utf-8"),
                 acks="all",
                 retries=3,
@@ -384,7 +427,10 @@ class SandboxManager:
             self._producer = None
 
     def create_session(self, payload: CreateSessionRequest) -> dict[str, Any]:
-        return self.repository.create_session(payload.resolved_session_id(), payload.user_id, payload.source_ip)
+        session = self.repository.create_session(payload.resolved_session_id(), payload.user_id, payload.source_ip)
+        SESSIONS_CREATED.inc()
+        SESSIONS_ACTIVE.inc()
+        return session
 
     def log_action(
         self,
@@ -402,6 +448,7 @@ class SandboxManager:
             response_sent=response_data,
             trigger_tags=[trigger.trigger_type for trigger in triggers],
         )
+        ACTIONS_LOGGED.inc()
         for trigger in triggers:
             self.repository.record_honeypot_hit(
                 sandbox_token=sandbox_token,
@@ -413,9 +460,12 @@ class SandboxManager:
                     "method": str(request_data.get("method") or "GET"),
                 },
             )
+            HONEYPOT_HITS.labels(trigger_type=trigger.trigger_type).inc()
 
     def terminate_session(self, sandbox_token: str) -> dict[str, Any] | None:
         session = self.repository.terminate_session(sandbox_token)
+        if session:
+            SESSIONS_ACTIVE.dec()
         if session and self._producer is not None:
             self._producer.send(
                 FEEDBACK_TRIGGER_TOPIC,
@@ -774,6 +824,7 @@ def _html_or_json_response(request: Request, path: str, method: str, body: Any =
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global _expiry_thread
+    _validate_startup_configuration()
     manager.start()
     _stop_event.clear()
 
@@ -800,8 +851,29 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="NeuroShield Sandbox", version="0.2.0", lifespan=lifespan)
 
 
+def _validate_startup_configuration() -> None:
+    if APP_ENV not in {"local", "test", "staging", "production"}:
+        raise RuntimeError("APP_ENV must be local, test, staging, or production.")
+    if APP_ENV in {"staging", "production"} and len(SANDBOX_SERVICE_TOKEN) < 32:
+        raise RuntimeError(
+            "Staging and production require SANDBOX_SERVICE_TOKEN to contain at least 32 characters."
+        )
+
+
 @app.middleware("http")
 async def sandbox_token_middleware(request: Request, call_next):
+    if request.url.path.startswith("/sessions"):
+        # Session create/terminate/replay is inference-service-to-sandbox-service traffic,
+        # never attacker traffic -- gate it on a shared service token instead of the
+        # attacker-facing sandbox token. A blank token is allowed only in local/test mode.
+        if APP_ENV in {"staging", "production"} and len(SANDBOX_SERVICE_TOKEN) < 32:
+            return JSONResponse(status_code=503, content={"detail": "Service authentication is unavailable"})
+        if SANDBOX_SERVICE_TOKEN:
+            provided = request.headers.get("x-service-token", "")
+            if provided != SANDBOX_SERVICE_TOKEN:
+                return JSONResponse(status_code=401, content={"detail": "Missing or invalid service token"})
+        return await call_next(request)
+
     if any(request.url.path.startswith(prefix) for prefix in EXEMPT_PATH_PREFIXES):
         return await call_next(request)
 
@@ -823,6 +895,11 @@ async def sandbox_token_middleware(request: Request, call_next):
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {"status": "ok", "timestamp": time.time(), "sandbox_timeout_sec": SANDBOX_TIMEOUT_SEC}
+
+
+@app.get("/metrics")
+def metrics() -> Response:
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.post("/sessions")

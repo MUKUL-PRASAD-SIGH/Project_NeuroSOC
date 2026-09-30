@@ -69,7 +69,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-neuroshield}
       POSTGRES_USER: ${POSTGRES_USER:-ns_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ns_pass}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your .env file (see .env.example)}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -91,7 +91,7 @@ services:
       - ./identity/realm-export.json:/opt/keycloak/data/import/neurosoc-realm.json:ro
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
-      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-change-me-local-only}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD in your .env file (see .env.example)}
     restart: unless-stopped
 
   redis:
@@ -116,16 +116,26 @@ services:
     networks: [neuroshield-net]
     ports:
       - "8080:8080"
+      - "5140:5140/udp"
     depends_on:
       kafka:
         condition: service_healthy
     volumes:
       - ./data:/data
     environment:
-      KAFKA_BOOTSTRAP: kafka:9092
-      INGESTION_MODE: all
+      APP_ENV: ${APP_ENV:-local}
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP:-kafka:9092}
+      KAFKA_SECURITY_PROTOCOL: ${KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
+      KAFKA_SASL_MECHANISM: ${KAFKA_SASL_MECHANISM:-SCRAM-SHA-512}
+      KAFKA_SASL_USERNAME: ${INGESTION_KAFKA_SASL_USERNAME:-}
+      KAFKA_SASL_PASSWORD: ${INGESTION_KAFKA_SASL_PASSWORD:-}
+      KAFKA_TOPICS_PREPROVISIONED: ${KAFKA_TOPICS_PREPROVISIONED:-false}
+      KAFKA_SSL_CA_LOCATION: ${KAFKA_SSL_CA_LOCATION:-/etc/ssl/certs/ca-certificates.crt}
+      INGESTION_MODE: ${INGESTION_MODE:-all}
       INGESTION_SOURCE_ID: ${INGESTION_SOURCE_ID:-ingestion-service}
+      INGESTION_TENANT_ID: ${INGESTION_TENANT_ID:-local}
       DATA_DIR: /data/pcap
+      SYSLOG_PORT: "5140"
       KAFKA_PRODUCER_RETRIES: "10"
       KAFKA_PRODUCER_DELAY: "15"
       KAFKA_SETUP_RETRIES: "10"
@@ -142,7 +152,13 @@ services:
     volumes:
       - ./data:/data
     environment:
-      KAFKA_BOOTSTRAP: kafka:9092
+      APP_ENV: ${APP_ENV:-local}
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP:-kafka:9092}
+      KAFKA_SECURITY_PROTOCOL: ${KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
+      KAFKA_SASL_MECHANISM: ${KAFKA_SASL_MECHANISM:-SCRAM-SHA-512}
+      KAFKA_SASL_USERNAME: ${FEATURE_KAFKA_SASL_USERNAME:-}
+      KAFKA_SASL_PASSWORD: ${FEATURE_KAFKA_SASL_PASSWORD:-}
+      KAFKA_SSL_CA_LOCATION: ${KAFKA_SSL_CA_LOCATION:-/etc/ssl/certs/ca-certificates.crt}
       FLOW_TIMEOUT_SECONDS: "3"
     restart: unless-stopped
 
@@ -170,17 +186,32 @@ services:
       - ./data:/data
     environment:
       APP_ENV: ${APP_ENV:-local}
-      KAFKA_BOOTSTRAP: kafka:9092
-      DATABASE_URL: ${DATABASE_URL:-postgresql://ns_user:ns_pass@postgres:5432/neuroshield}
-      REDIS_URL: redis://redis:6379
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP:-kafka:9092}
+      KAFKA_SECURITY_PROTOCOL: ${KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
+      KAFKA_SASL_MECHANISM: ${KAFKA_SASL_MECHANISM:-SCRAM-SHA-512}
+      KAFKA_SASL_USERNAME: ${INFERENCE_KAFKA_SASL_USERNAME:-}
+      KAFKA_SASL_PASSWORD: ${INFERENCE_KAFKA_SASL_PASSWORD:-}
+      KAFKA_SSL_CA_LOCATION: ${KAFKA_SSL_CA_LOCATION:-/etc/ssl/certs/ca-certificates.crt}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in your .env file (see .env.example)}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      RATE_LIMIT_HASH_SECRET: ${RATE_LIMIT_HASH_SECRET:-}
       MODEL_PATH: /models
       FEATURE_COLUMNS_PATH: /data/feature_columns.txt
       SANDBOX_CONFIDENCE_THRESHOLD: "0.50"
       SANDBOX_BASE_URL: http://sandbox:8001
+      SANDBOX_SERVICE_TOKEN: ${SANDBOX_SERVICE_TOKEN:-}
       OIDC_ISSUER: ${OIDC_ISSUER:-http://keycloak:8080/realms/neurosoc}
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:-neurosoc-dashboard}
       OIDC_REQUIRED: ${OIDC_REQUIRED:-false}
       ENABLE_SIMULATION_API: ${ENABLE_SIMULATION_API:-false}
+      IPINFO_TOKEN: ${IPINFO_TOKEN:-}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      REPORT_EMAIL: ${REPORT_EMAIL:-}
+      REPORT_TIME: ${REPORT_TIME:-06:00}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5174}
       API_MAX_REQUEST_BODY_BYTES: ${API_MAX_REQUEST_BODY_BYTES:-1048576}
       API_RATE_LIMIT_PER_MINUTE: ${API_RATE_LIMIT_PER_MINUTE:-120}
@@ -206,9 +237,16 @@ services:
       - ALL
     pids_limit: 128
     environment:
-      KAFKA_BOOTSTRAP: kafka:9092
-      DATABASE_URL: ${DATABASE_URL:-postgresql://ns_user:ns_pass@postgres:5432/neuroshield}
+      APP_ENV: ${APP_ENV:-local}
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP:-kafka:9092}
+      KAFKA_SECURITY_PROTOCOL: ${KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
+      KAFKA_SASL_MECHANISM: ${KAFKA_SASL_MECHANISM:-SCRAM-SHA-512}
+      KAFKA_SASL_USERNAME: ${SANDBOX_KAFKA_SASL_USERNAME:-}
+      KAFKA_SASL_PASSWORD: ${SANDBOX_KAFKA_SASL_PASSWORD:-}
+      KAFKA_SSL_CA_LOCATION: ${KAFKA_SSL_CA_LOCATION:-/etc/ssl/certs/ca-certificates.crt}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in your .env file (see .env.example)}
       SANDBOX_TIMEOUT_SEC: "300"
+      SANDBOX_SERVICE_TOKEN: ${SANDBOX_SERVICE_TOKEN:-}
     restart: unless-stopped
 
   feedback:
@@ -217,15 +255,19 @@ services:
     profiles: ["phase8plus"]
     networks: [neuroshield-net]
     depends_on:
-      kafka:
-        condition: service_healthy
       postgres:
         condition: service_healthy
     volumes:
       - ./data:/data
     environment:
-      KAFKA_BOOTSTRAP: kafka:9092
-      DATABASE_URL: ${DATABASE_URL:-postgresql://ns_user:ns_pass@postgres:5432/neuroshield}
+      APP_ENV: ${APP_ENV:-local}
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP:-kafka:9092}
+      KAFKA_SECURITY_PROTOCOL: ${KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
+      KAFKA_SASL_MECHANISM: ${KAFKA_SASL_MECHANISM:-SCRAM-SHA-512}
+      KAFKA_SASL_USERNAME: ${FEEDBACK_KAFKA_SASL_USERNAME:-}
+      KAFKA_SASL_PASSWORD: ${FEEDBACK_KAFKA_SASL_PASSWORD:-}
+      KAFKA_SSL_CA_LOCATION: ${KAFKA_SSL_CA_LOCATION:-/etc/ssl/certs/ca-certificates.crt}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in your .env file (see .env.example)}
       POLL_INTERVAL_SECONDS: "30"
     restart: unless-stopped
 
@@ -237,8 +279,6 @@ services:
     profiles: ["phase8plus"]
     networks: [neuroshield-net]
     depends_on:
-      kafka:
-        condition: service_healthy
       postgres:
         condition: service_healthy
     volumes:
@@ -246,8 +286,8 @@ services:
       - ./models:/models:ro
       - ./models/candidates:/models/candidates
     environment:
-      KAFKA_BOOTSTRAP: kafka:9092
-      DATABASE_URL: ${DATABASE_URL:-postgresql://ns_user:ns_pass@postgres:5432/neuroshield}
+      APP_ENV: ${APP_ENV:-local}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in your .env file (see .env.example)}
       RETRAIN_MIN_FEEDBACK_SAMPLES: "3"
       RETRAIN_INTERVAL_SECONDS: "30"
       MODEL_VERSION_FILE: /models/model_version.json
@@ -260,6 +300,12 @@ services:
       args:
         VITE_API_URL: http://localhost:8000
         VITE_ENABLE_MSW: "false"
+        VITE_KEYCLOAK_URL: ${VITE_KEYCLOAK_URL:-http://localhost:8081}
+        VITE_KEYCLOAK_REALM: ${VITE_KEYCLOAK_REALM:-neurosoc}
+        VITE_KEYCLOAK_CLIENT_ID: ${VITE_KEYCLOAK_CLIENT_ID:-neurosoc-dashboard}
+        # Set OIDC_REQUIRED and VITE_OIDC_REQUIRED to "true" together (and start the
+        # local-identity profile for Keycloak) to require sign-in for this run.
+        VITE_OIDC_REQUIRED: ${VITE_OIDC_REQUIRED:-false}
     container_name: neuroshield-dashboard
     profiles: ["phase11plus", "demo"]
     networks:
@@ -307,7 +353,9 @@ services:
       - prometheus
     volumes:
       - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/neurosoc-dashboards
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-neuroshield_admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in your .env file (see .env.example)}
       GF_USERS_ALLOW_SIGN_UP: "false"
     restart: unless-stopped

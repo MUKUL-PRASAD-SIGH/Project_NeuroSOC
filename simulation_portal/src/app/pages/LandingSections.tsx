@@ -19,9 +19,9 @@ const SERVICES = [
 ];
 
 const OUTCOMES = [
-  ['Normal', 'You continue straight to your account.'],
-  ['Unusual', 'The session pauses briefly for review; reloading restores access.'],
-  ['Likely attack', 'The session is moved to an isolated environment and recorded for analysts.'],
+  ['Continuous protection', 'Every sign-in and payment is checked in real time against how you normally bank.'],
+  ['Instant alerts', 'We let you know straight away if something does not look like you.'],
+  ['Around-the-clock team', 'Our security specialists review unusual activity 24 hours a day.'],
 ];
 
 const PREVIEW_ROWS = [
@@ -49,12 +49,12 @@ export function Hero() {
             <Link to="/login" className="rounded-md bg-[#0b2545] px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#13315c]">
               Sign in to online banking
             </Link>
-            <Link
-              to="/system-flow"
+            <a
+              href="#security"
               className="rounded-md border border-slate-300 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:border-slate-400"
             >
               How protection works
-            </Link>
+            </a>
           </div>
         </div>
 
@@ -109,13 +109,13 @@ export function Services() {
 
 export function SecurityExplainer() {
   return (
-    <section className="border-t border-slate-200 bg-slate-50">
+    <section id="security" className="border-t border-slate-200 bg-slate-50">
       <div className="mx-auto grid max-w-6xl gap-10 px-6 py-16 md:grid-cols-2">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight text-[#0b2545]">How we protect your session</h2>
+          <h2 className="text-2xl font-semibold tracking-tight text-[#0b2545]">How we protect your account</h2>
           <p className="mt-3 text-sm leading-relaxed text-slate-600">
-            Each session is scored by a set of models (SNN, LNN and XGBoost) using network and behavioural signals.
-            The result decides what happens next.
+            Security runs quietly in the background of every session, learning how you normally bank so genuine
+            customers are never slowed down.
           </p>
         </div>
         <ol className="space-y-4 text-sm">

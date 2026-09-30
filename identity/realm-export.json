@@ -8,7 +8,8 @@
     "realm": [
       { "name": "analyst", "description": "Review alerts and evidence" },
       { "name": "operator", "description": "Run approved response actions" },
-      { "name": "admin", "description": "Manage platform configuration" },
+      { "name": "admin", "description": "Manage tenant-level operations" },
+      { "name": "platform-admin", "description": "Manage shared models and platform-wide configuration across tenants" },
       { "name": "auditor", "description": "Read audit and compliance records" }
     ]
   },
@@ -29,6 +30,23 @@
         "http://localhost:3000",
         "http://localhost:5174"
       ],
+      "protocolMappers": [
+        {
+          "name": "tenant-id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "tenant_id",
+            "claim.name": "tenant_id",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "multivalued": "false"
+          }
+        }
+      ],
       "attributes": {
         "post.logout.redirect.uris": "http://localhost:3000/*##http://localhost:5174/*"
       }
@@ -40,6 +58,9 @@
       "enabled": true,
       "email": "pilot-analyst@localhost",
       "emailVerified": true,
+      "attributes": {
+        "tenant_id": ["local"]
+      },
       "firstName": "Pilot",
       "lastName": "Analyst",
       "credentials": [

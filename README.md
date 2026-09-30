@@ -444,9 +444,20 @@ OIDC_REQUIRED=true
 ```
 
 - `APP_ENV=staging` or `APP_ENV=production` refuses to start unless OIDC and CORS use HTTPS, the simulation APIs are off, and a non-demo PostgreSQL URL is configured.
+- Shared environments also require `KAFKA_SECURITY_PROTOCOL=SASL_SSL`, a supported SCRAM mechanism, separate non-empty service principals/secrets (`INGESTION_KAFKA_*`, `FEATURE_KAFKA_*`, `INFERENCE_KAFKA_*`, etc.), and a readable trusted CA file at `KAFKA_SSL_CA_LOCATION`. Point `KAFKA_BOOTSTRAP` at the provisioned shared broker; the bundled Compose broker is local plaintext only. Provision topics and ACLs through infrastructure, then set `KAFKA_TOPICS_PREPROVISIONED=true`; runtime services do not receive cluster-wide topic creation rights. Limit each service principal to its required topics, and give each tenant source a separately controlled producer identity or equivalent broker-side isolation before trusting its tenant assignment.
+- Shared inference deployments require a reachable, credentialed `rediss://` `REDIS_URL` and a 32+ character `RATE_LIMIT_HASH_SECRET` shared by replicas. API quotas use atomic Redis counters across replicas; requests fail with 503 if that limiter loses Redis, instead of silently reverting to per-process quotas. Local Compose Redis remains unauthenticated and local-only.
+- Shared PostgreSQL connections across inference, sandbox, feedback, and retraining require `sslmode=verify-full` plus a readable trusted server CA via the `sslrootcert` URL parameter or `PGSSLROOTCERT`. The database hostname must match its certificate.
+- When the sandbox service is configured, staging/production also require the same randomly generated `SANDBOX_SERVICE_TOKEN` (at least 32 characters) in inference and sandbox; local/test can leave it blank.
 - `CORS_ALLOWED_ORIGINS` accepts explicit HTTP(S) origins only. `TRUSTED_PROXY_IPS` accepts IPs or CIDRs only.
-- Model reload and promotion endpoints are **admin-only**.
+- Shared model reload and promotion endpoints require the separate **platform-admin** role. Tenant admins cannot change models used by every tenant.
+- Candidate promotion, rejection, and rollback write an audited attempt before changing state, then require a success audit event. Candidate, active-manifest, and rollback-history files are restored when the final audit write fails.
+- In shared mode, every OIDC access token must carry a signed `tenant_id` claim. The local Keycloak realm export maps the administrator-managed `tenant_id` user attribute into the token; the API ignores caller-supplied tenant headers.
+- Set a unique `INGESTION_TENANT_ID` on each tenant-assigned sensor process in staging/production. Packet and flow messages use the required tenant-scoped v1.2 event schema. Unauthenticated bank-portal ingestion is local/test only.
+- PostgreSQL verdict, alert, decision, audit, training-label, and behavioral-profile storage is tenant-scoped with application filters and row-level security. Existing rows without verified ownership stay unassigned and are hidden from tenant queries.
+- Shared-mode tenant isolation still needs a production database migration/backup rehearsal, production IdP and claim-mapping verification, source-network isolation, and an explicit policy for cross-tenant model training. Do not treat local tests as a production certification.
 - With PostgreSQL configured, authentication, alert, response-action and model-change events are written to `security_audit_events`.
+- Analyst decisions, optional training labels, and their success audit event commit in one PostgreSQL transaction. The API returns 503 and leaves its in-memory decision cache untouched if any part of that transaction fails.
+- Audit events are tenant-scoped, appended to a SHA-256 hash chain, and exportable by tenant admins/auditors from `GET /api/v1/audit/events?after_sequence=0`. The endpoint verifies each returned page; external immutable anchoring and retention policy are still required to protect against a database administrator rewriting both rows and chain state.
 - Change the example passwords in `identity/realm-export.json` before using a shared environment.
 
 </details>
@@ -458,9 +469,11 @@ OIDC_REQUIRED=true
 pytest tests/
 node --test tests/test_production_build_guard.mjs
 python scripts/check_production_credential_patterns.py
+npm --prefix dashboard run build
 ```
 
-The CI workflow in [`.github/workflows`](.github/workflows) runs the build guard and credential scan on every push.
+For the simulation portal build, set `VITE_USE_MOCKS=false` before running `npm run build` from `simulation_portal/`.
+The CI workflow in [`.github/workflows/product-safety.yml`](.github/workflows/product-safety.yml) runs the backend suite, both production frontend builds, Docker image builds, Compose configuration validation, the build guard, credential scan, and per-image SPDX SBOM artifact generation.
 
 </details>
 
@@ -510,13 +523,17 @@ Project_NeuroSOC/
 ## 🗺️ Roadmap
 
 - [x] SNN + LNN + XGBoost hybrid detection
-- [x] Kafka streaming pipeline with versioned event schemas and idempotency IDs
+- [x] Kafka streaming pipeline with versioned tenant events, idempotency IDs, fail-closed SASL/TLS client configuration, and infrastructure-managed shared topics
 - [x] Honeypot sandbox and feedback capture
 - [x] Analyst dashboard and NovaTrust bank simulation
 - [x] Keycloak OIDC, endpoint RBAC, admin-only model controls, audit log
-- [ ] Candidate model approval, promotion and rollback workflow
-- [ ] Dashboard bearer-token wiring and multi-tenant authorization
-- [ ] Tamper-evident audit export and retention policies
+- [x] Analyst alert decisions, model candidate approval/promotion/rollback, and dashboard bearer-token wiring
+- [x] Per-alert feature explanations and Prometheus/Grafana overview
+- [x] Cross-replica API rate limits through Redis atomic counters; shared inference startup requires authenticated TLS Redis and fails closed on outage
+- [x] Tenant-scoped append-only audit hash chains with paginated admin/auditor export, per-page integrity checks, and atomic analyst decision recording
+- [~] OIDC, event, alert, profile, audit, rate-limit, and database query isolation carry tenant scope; production IdP lifecycle, per-source broker identity/ACL verification, cross-tenant model-training policy, external audit anchoring, retention policy, and restore rehearsal remain
+- [ ] Approved production dataset, model drift/fairness/adversarial evaluation, and reproducible training
+- [ ] SIEM/EDR/ticketing connectors, incident runbooks, backup/restore drills, and load/security rehearsal
 
 ---
 

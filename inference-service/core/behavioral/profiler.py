@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import threading
@@ -57,9 +58,11 @@ class UserProfile:
     session_count: int
     last_updated: float
     alpha: float = 0.1
+    tenant_id: str = "local"
 
     def to_payload(self) -> dict:
         return {
+            "tenant_id": self.tenant_id,
             "user_id": self.user_id,
             "profile_vector": self.profile_vector.astype(float).tolist(),
             "profile_std": self.profile_std.astype(float).tolist(),
@@ -77,6 +80,7 @@ class UserProfile:
             session_count=int(payload.get("session_count", 0)),
             last_updated=float(payload.get("last_updated", time.time())),
             alpha=float(payload.get("alpha", 0.1)),
+            tenant_id=str(payload.get("tenant_id", "local")),
         )
 
 
@@ -92,7 +96,7 @@ class BehavioralProfiler:
         self.storage_dir = Path(storage_dir) if storage_dir else default_storage
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.alpha = alpha
-        self._profiles: dict[str, UserProfile] = {}
+        self._profiles: dict[tuple[str, str], UserProfile] = {}
         self._lock = threading.RLock()
         self._table_ready = False
 
@@ -105,18 +109,25 @@ class BehavioralProfiler:
         vector = np.nan_to_num(vector, copy=False)
         return vector
 
-    def _profile_path(self, user_id: str) -> Path:
-        safe_user_id = "".join(character if character.isalnum() or character in ("-", "_") else "_" for character in user_id)
-        return self.storage_dir / f"{safe_user_id}.json"
+    def _profile_path(self, tenant_id: str, user_id: str) -> Path:
+        identity_hash = hashlib.sha256(f"{tenant_id}\0{user_id}".encode("utf-8")).hexdigest()
+        return self.storage_dir / f"{identity_hash}.json"
 
-    def _connect(self):
+    def _connect(self, tenant_id: str | None = None):
         if not self.database_url or psycopg2 is None:
             return None
-        return psycopg2.connect(
+        connection = psycopg2.connect(
             self.database_url,
             connect_timeout=5,
             options="-c statement_timeout=10000 -c lock_timeout=3000",
         )
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT set_config('app.tenant_id', %s, false)", (tenant_id or "",))
+            return connection
+        except Exception:
+            connection.close()
+            raise
 
     def _ensure_table(self) -> None:
         if self._table_ready or not self.database_url or psycopg2 is None:
@@ -125,23 +136,37 @@ class BehavioralProfiler:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    CREATE TABLE IF NOT EXISTS user_behavior_profiles (
-                        user_id TEXT PRIMARY KEY,
+                    CREATE TABLE IF NOT EXISTS user_behavior_profiles_v2 (
+                        tenant_id TEXT NOT NULL,
+                        user_id TEXT NOT NULL,
                         profile_vector JSONB NOT NULL,
                         profile_std JSONB NOT NULL,
                         session_count INTEGER NOT NULL,
                         last_updated DOUBLE PRECISION NOT NULL,
-                        alpha DOUBLE PRECISION NOT NULL
+                        alpha DOUBLE PRECISION NOT NULL,
+                        PRIMARY KEY (tenant_id, user_id)
                     )
                     """
+                )
+                cursor.execute("ALTER TABLE user_behavior_profiles_v2 ENABLE ROW LEVEL SECURITY")
+                cursor.execute("ALTER TABLE user_behavior_profiles_v2 FORCE ROW LEVEL SECURITY")
+                cursor.execute(
+                    "DO $neurosoc$ BEGIN IF NOT EXISTS ("
+                    "SELECT 1 FROM pg_policies WHERE schemaname = current_schema() "
+                    "AND tablename = 'user_behavior_profiles_v2' AND policyname = 'tenant_isolation'"
+                    ") THEN CREATE POLICY tenant_isolation ON user_behavior_profiles_v2 "
+                    "USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')) "
+                    "WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')); "
+                    "END IF; END; $neurosoc$;"
                 )
             connection.commit()
         self._table_ready = True
 
-    def update_profile(self, user_id: str, session_vector: np.ndarray | list[float]) -> UserProfile:
+    def update_profile(self, user_id: str, session_vector: np.ndarray | list[float], tenant_id: str = "local") -> UserProfile:
         vector = self._normalize_vector(session_vector)
+        cache_key = (tenant_id, user_id)
         with self._lock:
-            profile = self.load_profile(user_id)
+            profile = self.load_profile(user_id, tenant_id)
             if profile is None:
                 profile = UserProfile(
                     user_id=user_id,
@@ -150,6 +175,7 @@ class BehavioralProfiler:
                     session_count=1,
                     last_updated=time.time(),
                     alpha=self.alpha,
+                    tenant_id=tenant_id,
                 )
             else:
                 alpha = profile.alpha
@@ -161,14 +187,14 @@ class BehavioralProfiler:
                 profile.profile_std = np.sqrt(np.maximum(updated_var, 0.0)).astype(np.float32)
                 profile.session_count += 1
                 profile.last_updated = time.time()
-            self._profiles[user_id] = profile
-            self.save_profile(user_id)
+            self._profiles[cache_key] = profile
+            self.save_profile(user_id, tenant_id)
             return profile
 
-    def compute_delta(self, user_id: str, session_vector: np.ndarray | list[float]) -> float:
+    def compute_delta(self, user_id: str, session_vector: np.ndarray | list[float], tenant_id: str = "local") -> float:
         vector = self._normalize_vector(session_vector)
         with self._lock:
-            profile = self.load_profile(user_id)
+            profile = self.load_profile(user_id, tenant_id)
             if profile is None:
                 return 0.5
             base = profile.profile_vector.astype(np.float32)
@@ -187,9 +213,9 @@ class BehavioralProfiler:
             return "FORGETFUL_USER"
         return "LEGITIMATE"
 
-    def save_profile(self, user_id: str) -> None:
+    def save_profile(self, user_id: str, tenant_id: str = "local") -> None:
         with self._lock:
-            profile = self._profiles.get(user_id)
+            profile = self._profiles.get((tenant_id, user_id))
             if profile is None:
                 return
 
@@ -197,14 +223,14 @@ class BehavioralProfiler:
             if self.database_url and psycopg2 is not None:
                 try:
                     self._ensure_table()
-                    with self._connect() as connection:
+                    with self._connect(tenant_id) as connection:
                         with connection.cursor() as cursor:
                             cursor.execute(
                                 """
-                                INSERT INTO user_behavior_profiles (
-                                    user_id, profile_vector, profile_std, session_count, last_updated, alpha
-                                ) VALUES (%s, %s, %s, %s, %s, %s)
-                                ON CONFLICT (user_id) DO UPDATE SET
+                                INSERT INTO user_behavior_profiles_v2 (
+                                    tenant_id, user_id, profile_vector, profile_std, session_count, last_updated, alpha
+                                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                                ON CONFLICT (tenant_id, user_id) DO UPDATE SET
                                     profile_vector = EXCLUDED.profile_vector,
                                     profile_std = EXCLUDED.profile_std,
                                     session_count = EXCLUDED.session_count,
@@ -212,6 +238,7 @@ class BehavioralProfiler:
                                     alpha = EXCLUDED.alpha
                                 """,
                                 (
+                                    profile.tenant_id,
                                     profile.user_id,
                                     Json(profile.profile_vector.astype(float).tolist()),
                                     Json(profile.profile_std.astype(float).tolist()),
@@ -223,32 +250,32 @@ class BehavioralProfiler:
                         connection.commit()
                     saved_to_database = True
                 except Exception as exc:  # pragma: no cover - depends on runtime DB availability
-                    log.warning("Failed to persist behavioral profile to PostgreSQL for user %s: %s", user_id, exc)
+                    log.warning("Failed to persist behavioral profile for tenant-scoped user (%s).", type(exc).__name__)
 
             if not saved_to_database:
-                self._profile_path(user_id).write_text(
+                self._profile_path(tenant_id, user_id).write_text(
                     json.dumps(profile.to_payload(), indent=2),
                     encoding="utf-8",
                 )
 
-    def load_profile(self, user_id: str) -> UserProfile | None:
+    def load_profile(self, user_id: str, tenant_id: str = "local") -> UserProfile | None:
         with self._lock:
-            cached = self._profiles.get(user_id)
+            cached = self._profiles.get((tenant_id, user_id))
             if cached is not None:
                 return cached
 
             if self.database_url and psycopg2 is not None:
                 try:
                     self._ensure_table()
-                    with self._connect() as connection:
+                    with self._connect(tenant_id) as connection:
                         with connection.cursor() as cursor:
                             cursor.execute(
                                 """
                                 SELECT user_id, profile_vector, profile_std, session_count, last_updated, alpha
-                                FROM user_behavior_profiles
-                                WHERE user_id = %s
+                                FROM user_behavior_profiles_v2
+                                WHERE tenant_id = %s AND user_id = %s
                                 """,
-                                (user_id,),
+                                (tenant_id, user_id),
                             )
                             row = cursor.fetchone()
                     if row:
@@ -259,18 +286,21 @@ class BehavioralProfiler:
                             session_count=int(row[3]),
                             last_updated=float(row[4]),
                             alpha=float(row[5]),
+                            tenant_id=tenant_id,
                         )
-                        self._profiles[user_id] = profile
+                        self._profiles[(tenant_id, user_id)] = profile
                         return profile
                 except Exception as exc:  # pragma: no cover - depends on runtime DB availability
                     log.warning("Failed to load behavioral profile from PostgreSQL for user %s: %s", user_id, exc)
 
-            path = self._profile_path(user_id)
+            path = self._profile_path(tenant_id, user_id)
             if not path.exists():
                 return None
             payload = json.loads(path.read_text(encoding="utf-8"))
             profile = UserProfile.from_payload(payload)
-            self._profiles[user_id] = profile
+            if profile.tenant_id != tenant_id or profile.user_id != user_id:
+                raise ValueError("Stored behavioral profile identity does not match its tenant-scoped path.")
+            self._profiles[(tenant_id, user_id)] = profile
             return profile
 
 

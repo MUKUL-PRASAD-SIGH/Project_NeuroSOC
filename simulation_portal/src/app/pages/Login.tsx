@@ -36,12 +36,13 @@ export default function Login() {
         writePortalSession({
           sessionId: honeypot.sessionId,
           email,
+          userId: email || 'anonymous',
           verdict: honeypot.verdict,
           confidence: honeypot.confidence,
           sandbox: honeypot.sandbox || null,
-          authenticated: false,
+          authenticated: Boolean(honeypot.sandbox?.active),
         });
-        navigate('/security-alert');
+        navigate(honeypot.sandbox?.active ? '/dashboard' : '/security-alert');
         return;
       }
 
@@ -55,25 +56,23 @@ export default function Login() {
       // instead of issuing a second history lookup before completing sign-in.
       const verdict = loginData;
 
+      const sandboxed = Boolean(loginData.sandbox?.active || verdict.sandbox?.active);
+
       writePortalSession({
         sessionId: loginData.sessionId,
         email,
         userId: loginData.user_id,
         displayName: loginData.displayName,
-        authenticated: loginData.authenticated,
+        // A diverted session is signed in to the decoy vault served by the same pages.
+        authenticated: loginData.authenticated || sandboxed,
         verdict: verdict.verdict,
         confidence: verdict.confidence,
         sandbox: loginData.sandbox || verdict.sandbox || null,
         account: loginData.account,
       });
 
-      if (!loginData.authenticated && !(loginData.sandbox?.active || verdict.sandbox?.active)) {
+      if (!loginData.authenticated && !sandboxed) {
         setError(loginData.error || 'Invalid credentials. Please try again.');
-        return;
-      }
-
-      if (verdict.verdict === 'HACKER' || loginData.sandbox?.active || verdict.sandbox?.active) {
-        navigate('/security-alert');
         return;
       }
 
