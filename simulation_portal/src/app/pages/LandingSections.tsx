@@ -138,6 +138,9 @@ export function Hero() {
             <a href="#features" className="text-white/80 underline-offset-4 hover:text-white hover:underline">
               Explore features
             </a>
+            <a href="#security" className="text-white/60 underline-offset-4 hover:text-white hover:underline">
+              How protection works
+            </a>
             <Link to="/system-flow" className="text-white/60 underline-offset-4 hover:text-white hover:underline">
               How protection works
             </Link>
@@ -267,9 +270,9 @@ export function Cards() {
 }
 
 const OUTCOMES = [
-  ['Normal', 'You continue straight to your account.'],
-  ['Unusual', 'The session pauses briefly for review; reloading restores access.'],
-  ['Likely attack', 'The session is moved to an isolated environment and recorded for analysts.'],
+  ['Continuous protection', 'Every sign-in and payment is checked in real time against how you normally bank.'],
+  ['Instant alerts', 'We let you know straight away if something does not look like you.'],
+  ['Around-the-clock team', 'Our security specialists review unusual activity 24 hours a day.'],
 ];
 
 export function SecurityExplainer() {
@@ -277,10 +280,10 @@ export function SecurityExplainer() {
     <section id="security" className="border-t border-white/10 bg-[#07080d]/70 backdrop-blur-sm">
       <div className="mx-auto grid max-w-6xl gap-10 px-6 py-24 md:grid-cols-2">
         <div>
-          <h2 className="text-3xl font-semibold tracking-tight text-white">How we protect your session</h2>
+          <h2 className="text-3xl font-semibold tracking-tight text-white">How we protect your account</h2>
           <p className="mt-4 text-sm leading-relaxed text-white/60">
-            Each session is scored by a set of models (SNN, LNN and XGBoost) using network and behavioural signals.
-            The result decides what happens next.
+            Security runs quietly in the background of every session, learning how you normally bank so genuine
+            customers are never slowed down.
           </p>
         </div>
         <ol className="space-y-5 text-sm">
