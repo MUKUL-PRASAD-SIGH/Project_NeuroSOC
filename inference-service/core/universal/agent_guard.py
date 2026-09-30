@@ -15,11 +15,72 @@ from .taxonomy import VALUE_ACTIONS
 VALUE_Z_THRESHOLD = 3.0
 BURST_RATE_Z = 3.0
 
+# Policy checks against the site's agent registry (see sites.normalize_agents). Any single failure is
+# enough to pause the agent: a tool or resource the owner never approved is not a gray area.
+AUTHORIZATION_RISK = 0.7
+SENSITIVE_WINDOW_SECONDS = 60
+DEFAULT_MAX_SENSITIVE_PER_MINUTE = 10
+# Actions whose target resource must be on the agent's authorized list (plus its own sensitive actions).
+RESOURCE_CHECKED_ACTIONS = VALUE_ACTIONS | {"agent.tool_call", "permission.change", "api_key.create", "agent.config_change"}
 
-def evaluate(event: dict[str, Any], features: dict[str, float], z: dict[str, float]) -> tuple[float, list[str]]:
-    """Return (risk 0..1, reasons). Only agents and value-moving actions are judged here."""
+
+def spec_for(policy: list[dict[str, Any]] | None, agent_id: str) -> dict[str, Any] | None:
+    return next((agent for agent in policy or [] if agent.get("agent_id") == agent_id), None)
+
+
+def counts_as_sensitive(event: dict[str, Any], spec: dict[str, Any] | None) -> bool:
+    """Whether an agent event is a sensitive action for the rate window."""
+    if event["entity"]["type"] != "agent":
+        return False
+    return event["action"] in VALUE_ACTIONS or event["action"] in (spec or {}).get("sensitive_actions", [])
+
+
+def authorization(event: dict[str, Any], policy: list[dict[str, Any]] | None) -> tuple[float, list[str]]:
+    """Judge an agent event against the site's registry. No registry means no policy (0, [])."""
+    if not policy or event["entity"]["type"] != "agent":
+        return 0.0, []
+    agent_id = event["entity"]["id"]
+    spec = spec_for(policy, agent_id)
+    if spec is None:
+        return AUTHORIZATION_RISK, [f"agent {agent_id} is not registered for this application"]
+    reasons: list[str] = []
+    tool = (event.get("agent") or {}).get("tool")
+    if tool and spec.get("tools") and tool not in spec["tools"]:
+        reasons.append(f"tool {tool} is not permitted for agent {agent_id}")
+    resource = event["resource"]["id"]
+    checked = event["action"] in RESOURCE_CHECKED_ACTIONS or event["action"] in spec.get("sensitive_actions", [])
+    if checked and spec.get("authorized_resources") and resource not in spec["authorized_resources"]:
+        reasons.append(f"agent {agent_id} is not authorized to act on resource {resource}")
+    return (AUTHORIZATION_RISK, reasons) if reasons else (0.0, [])
+
+
+def evaluate(event: dict[str, Any], features: dict[str, float], z: dict[str, float],
+             policy: list[dict[str, Any]] | None = None,
+             sensitive_rate: int | None = None) -> tuple[float, list[str]]:
+    """Return (risk 0..1, reasons). Only agents and value-moving actions are judged here.
+
+    ``policy`` is the site's agent registry and ``sensitive_rate`` the number of sensitive actions this
+    agent performed in the last minute (including this one); both are optional, and without them this is
+    the original anomaly-only check.
+    """
     entity_type = event["entity"]["type"]
     action = event["action"]
+    auth_risk, auth_reasons = authorization(event, policy)
+    spec = spec_for(policy, event["entity"]["id"]) if policy else None
+    if sensitive_rate is not None and spec is not None:
+        limit = int(spec.get("max_sensitive_per_minute", DEFAULT_MAX_SENSITIVE_PER_MINUTE))
+        if sensitive_rate > limit:
+            auth_risk = AUTHORIZATION_RISK
+            auth_reasons.append(f"{sensitive_rate} sensitive actions in {SENSITIVE_WINDOW_SECONDS}s; "
+                                f"this agent is limited to {limit}")
+    if auth_risk:
+        base_risk, base_reasons = _anomaly(event, features, z, entity_type, action)
+        return min(auth_risk + base_risk, 1.0), auth_reasons + base_reasons
+    return _anomaly(event, features, z, entity_type, action)
+
+
+def _anomaly(event: dict[str, Any], features: dict[str, float], z: dict[str, float],
+             entity_type: str, action: str) -> tuple[float, list[str]]:
     moves_value = action in VALUE_ACTIONS or (action == "agent.tool_call" and (event.get("value") or {}).get("amount"))
     if entity_type != "agent" and not moves_value:
         return 0.0, []

@@ -9,6 +9,7 @@ const ResponseOpsPage = lazy(() => import("./pages/ResponseOps"));
 const NotFoundPage = lazy(() => import("./pages/NotFound"));
 const AuthCallbackPage = lazy(() => import("./pages/AuthCallback"));
 const ProtectionPage = lazy(() => import("./pages/Protection"));
+const CustomerDemoPage = lazy(() => import("./pages/CustomerDemo"));
 
 function LazyPage({ children }) {
   return (
@@ -24,6 +25,14 @@ const router = createBrowserRouter([
     element: (
       <LazyPage>
         <AuthCallbackPage />
+      </LazyPage>
+    ),
+  },
+  {
+    path: "/demo",
+    element: (
+      <LazyPage>
+        <CustomerDemoPage />
       </LazyPage>
     ),
   },

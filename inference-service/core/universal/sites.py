@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import secrets
 import threading
 import time
@@ -27,10 +28,18 @@ from urllib import request as urllib_request
 from urllib.parse import urlsplit
 
 from .store import get_json, set_json
+from .taxonomy import ACTIONS
 
 log = logging.getLogger(__name__)
 
 MODES = {"observe", "enforce"}
+APP_TYPES = {"web", "agent", "both"}
+MAX_AGENTS = 20
+MAX_TOOLS = 50
+MAX_RESOURCES = 50
+AGENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{1,62}$")
+TOOL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,63}$")
+RESOURCE_RE = re.compile(r"^[A-Za-z0-9_.:/-]{1,128}$")
 PRESETS_DIR_CANDIDATES = (
     Path(__file__).resolve().parents[3] / "sdk" / "presets",
     Path("/sdk/presets"),
@@ -56,6 +65,65 @@ def canonical_origin(value: str) -> str | None:
         return None
     port = f":{parsed.port}" if parsed.port else ""
     return f"{parsed.scheme}://{parsed.hostname.lower()}{port}"
+
+
+def normalize_agents(agents: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Validate and canonicalize a site's agent registry.
+
+    Each agent is ``{agent_id, name, tools[], sensitive_actions[], authorized_resources[],
+    max_sensitive_per_minute?}``. The guard treats an empty ``tools`` or ``authorized_resources`` list as
+    "not restricted", and a site with no agents at all as "no policy" (the anomaly detectors still run).
+    """
+    if agents is None:
+        return []
+    if len(agents) > MAX_AGENTS:
+        raise ValueError(f"A site can register at most {MAX_AGENTS} agents")
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for raw in agents:
+        agent_id = str(raw.get("agent_id", "")).strip()
+        if not AGENT_ID_RE.match(agent_id):
+            raise ValueError(f"Invalid agent id: {agent_id!r}")
+        if agent_id in seen:
+            raise ValueError(f"Duplicate agent id: {agent_id}")
+        seen.add(agent_id)
+
+        def _names(field: str, pattern: re.Pattern[str], limit: int) -> list[str]:
+            values = [str(v).strip() for v in raw.get(field) or []]
+            if len(values) > limit:
+                raise ValueError(f"{field} allows at most {limit} entries")
+            bad = [v for v in values if not pattern.match(v)]
+            if bad:
+                raise ValueError(f"Invalid {field} entry: {bad[0]!r}")
+            return list(dict.fromkeys(values))
+
+        sensitive = _names("sensitive_actions", re.compile(r"^[a-z]+(\.[a-z_]+)+$"), MAX_TOOLS)
+        unknown = [a for a in sensitive if a not in ACTIONS]
+        if unknown:
+            raise ValueError(f"sensitive_actions must be NeuroSOC taxonomy actions; unknown: {unknown[0]}")
+        entry: dict[str, Any] = {
+            "agent_id": agent_id,
+            "name": str(raw.get("name") or agent_id)[:128],
+            "tools": _names("tools", TOOL_RE, MAX_TOOLS),
+            "sensitive_actions": sensitive,
+            "authorized_resources": _names("authorized_resources", RESOURCE_RE, MAX_RESOURCES),
+        }
+        limit = raw.get("max_sensitive_per_minute")
+        if limit is not None:
+            if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
+                raise ValueError("max_sensitive_per_minute must be an integer from 1 to 1000")
+            entry["max_sensitive_per_minute"] = limit
+        out.append(entry)
+    return out
+
+
+def _clean_url(url: str | None) -> str | None:
+    if url is None or not url.strip():
+        return None
+    parsed = urlsplit(url.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or len(url) > 256:
+        raise ValueError("url must be an http(s) URL of at most 256 characters")
+    return url.strip()
 
 
 def load_preset(name: str) -> list[dict[str, Any]]:
@@ -122,9 +190,14 @@ class SiteRegistry:
     def create(self, tenant_id: str, name: str, allowed_origins: list[str], mode: str = "observe",
                rules: list[dict[str, Any]] | None = None, preset: str | None = None,
                publishable_key: str | None = None, secret_key: str | None = None,
-               site_id: str | None = None) -> tuple[dict[str, Any], str]:
+               site_id: str | None = None, agents: list[dict[str, Any]] | None = None,
+               app_type: str = "web", url: str | None = None, demo: bool = False) -> tuple[dict[str, Any], str]:
         if mode not in MODES:
             raise ValueError("mode must be observe or enforce")
+        if app_type not in APP_TYPES:
+            raise ValueError("app_type must be web, agent or both")
+        agents = normalize_agents(agents)
+        url = _clean_url(url)
         origins = []
         for origin in allowed_origins:
             canonical = canonical_origin(origin)
@@ -142,6 +215,10 @@ class SiteRegistry:
             "mode": mode,
             "preset": preset,
             "rules": rules if rules is not None else (load_preset(preset) if preset else []),
+            "agents": agents,
+            "app_type": app_type,
+            "url": url,
+            "demo": bool(demo),
             "webhooks": [],
             "created_at": time.time(),
         }
@@ -151,10 +228,19 @@ class SiteRegistry:
         return site, secret
 
     def update(self, site_id: str, *, rules: list[dict[str, Any]] | None = None, mode: str | None = None,
-               allowed_origins: list[str] | None = None) -> dict[str, Any] | None:
+               allowed_origins: list[str] | None = None, agents: list[dict[str, Any]] | None = None,
+               app_type: str | None = None, url: str | None = None) -> dict[str, Any] | None:
         site = self.get(site_id)
         if site is None:
             return None
+        if agents is not None:
+            site["agents"] = normalize_agents(agents)
+        if app_type is not None:
+            if app_type not in APP_TYPES:
+                raise ValueError("app_type must be web, agent or both")
+            site["app_type"] = app_type
+        if url is not None:
+            site["url"] = _clean_url(url)
         if rules is not None:
             site["rules"] = rules
         if mode is not None:
@@ -168,6 +254,15 @@ class SiteRegistry:
             for origin in site["allowed_origins"]:
                 self.kv.srem(f"origin:{origin}", site_id)
             site["allowed_origins"] = canonical
+        self._save(site)
+        return site
+
+    def mark_demo(self, site_id: str, demo: bool = True) -> dict[str, Any] | None:
+        """Flag a site as the connected NovaTrust demo application (set only by the demo router)."""
+        site = self.get(site_id)
+        if site is None:
+            return None
+        site["demo"] = bool(demo)
         self._save(site)
         return site
 
@@ -192,7 +287,8 @@ class SiteRegistry:
                 tenant_id=entry["tenant_id"], name=entry["name"], allowed_origins=entry.get("allowed_origins", []),
                 mode=entry.get("mode", "observe"), rules=entry.get("rules"), preset=entry.get("preset"),
                 publishable_key=entry.get("publishable_key"), secret_key=entry.get("secret_key"),
-                site_id=entry["site_id"],
+                site_id=entry["site_id"], agents=entry.get("agents"), app_type=entry.get("app_type", "web"),
+                url=entry.get("url"), demo=bool(entry.get("demo", False)),
             )
             seeded += 1
         return seeded

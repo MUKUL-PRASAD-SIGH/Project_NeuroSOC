@@ -60,6 +60,17 @@ class OverrideRequest(BaseModel):
     note: str | None = Field(default=None, max_length=500)
 
 
+class AgentSpec(BaseModel):
+    """One AI agent registered to a site. The guard pauses an agent that steps outside this."""
+    model_config = ConfigDict(extra="forbid")
+    agent_id: str = Field(min_length=2, max_length=63)
+    name: str | None = Field(default=None, max_length=128)
+    tools: list[str] = Field(default_factory=list, max_length=50)
+    sensitive_actions: list[str] = Field(default_factory=list, max_length=50)
+    authorized_resources: list[str] = Field(default_factory=list, max_length=50)
+    max_sensitive_per_minute: int | None = Field(default=None, ge=1, le=1000)
+
+
 class SiteCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=128)
@@ -67,6 +78,9 @@ class SiteCreateRequest(BaseModel):
     mode: Literal["observe", "enforce"] = "observe"
     preset: str | None = Field(default=None, max_length=64)
     rules: list[dict[str, Any]] | None = Field(default=None, max_length=200)
+    app_type: Literal["web", "agent", "both"] = "web"
+    url: str | None = Field(default=None, max_length=256)
+    agents: list[AgentSpec] = Field(default_factory=list, max_length=20)
 
 
 class SiteUpdateRequest(BaseModel):
@@ -75,6 +89,9 @@ class SiteUpdateRequest(BaseModel):
     allowed_origins: list[str] | None = Field(default=None, max_length=20)
     rules: list[dict[str, Any]] | None = Field(default=None, max_length=200)
     preset: str | None = Field(default=None, max_length=64)
+    app_type: Literal["web", "agent", "both"] | None = None
+    url: str | None = Field(default=None, max_length=256)
+    agents: list[AgentSpec] | None = Field(default=None, max_length=20)
 
 
 class WebhookRequest(BaseModel):
@@ -96,7 +113,9 @@ class _Stream:
                 self.clients.remove((websocket, client_tenant))
 
 
-def build_router(engine: UniversalEngine, registry: SiteRegistry, hooks: UniversalHooks) -> APIRouter:
+def build_router(engine: UniversalEngine, registry: SiteRegistry, hooks: UniversalHooks,
+                 extra_routers: tuple[APIRouter, ...] = ()) -> APIRouter:
+    """``extra_routers`` are mounted as-is; main.py uses this for the demo router, only in demo mode."""
     router = APIRouter()
     stream = _Stream()
 
@@ -127,6 +146,11 @@ def build_router(engine: UniversalEngine, registry: SiteRegistry, hooks: Univers
             raise HTTPException(status_code=404, detail="Site not found.")
         return site
 
+    def enrich(verdict: dict[str, Any]) -> dict[str, Any]:
+        """Add the application's current name (read at response time, so renames show up immediately)."""
+        site = registry.get(verdict["site_id"]) if verdict.get("site_id") else None
+        return {**verdict, "site_name": site["name"] if site else None}
+
     async def score(raw: SdkEvent, site: dict[str, Any], request: Request, source: str) -> dict[str, Any]:
         tenant = site["tenant_id"]
         client_ip = hooks.client_ip(request)
@@ -137,10 +161,11 @@ def build_router(engine: UniversalEngine, registry: SiteRegistry, hooks: Univers
         if cached_id:
             cached = engine.verdict(tenant, cached_id)
             if cached:
-                return cached
+                return enrich(cached)
         previous = engine.session_verdict(tenant, event["session_id"])
         already_shadowed = bool(previous and previous.get("action") == "shadow")
-        verdict = await run_in_threadpool(engine.process, event, mode=site.get("mode", "observe"))
+        verdict = await run_in_threadpool(engine.process, event, mode=site.get("mode", "observe"),
+                                          agent_policy=site.get("agents") or None)
         engine.kv.set(idempotency_key, verdict["verdict_id"], ttl=IDEMPOTENCY_TTL)
 
         if hooks.publish is not None:
@@ -151,6 +176,7 @@ def build_router(engine: UniversalEngine, registry: SiteRegistry, hooks: Univers
         # Mirror a session into the sandbox once, when it first becomes shadowed, not on every event.
         if verdict["action"] == "shadow" and verdict["enforced"] and not already_shadowed and hooks.on_shadow is not None:
             await run_in_threadpool(hooks.on_shadow, verdict, client_ip)
+        verdict = enrich(verdict)
         deliver_webhooks(site, verdict)
         await stream.broadcast(tenant, {"type": "universal.verdict", "data": verdict})
         return verdict
@@ -196,7 +222,7 @@ def build_router(engine: UniversalEngine, registry: SiteRegistry, hooks: Univers
     # ── analyst routes ──────────────────────────────────────────────────────
     @router.get("/api/v1/universal/verdicts/latest")
     async def latest(request: Request, limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
-        return {"verdicts": engine.latest_verdicts(hooks.tenant_of(request), limit)}
+        return {"verdicts": [enrich(v) for v in engine.latest_verdicts(hooks.tenant_of(request), limit)]}
 
     @router.get("/api/v1/universal/entities/{entity_type}/{entity_id}")
     async def entity(entity_type: str, entity_id: str, request: Request) -> dict[str, Any]:
@@ -235,7 +261,9 @@ def build_router(engine: UniversalEngine, registry: SiteRegistry, hooks: Univers
         require_site_admin(request)
         try:
             site, secret = registry.create(hooks.tenant_of(request), body.name, body.allowed_origins,
-                                           mode=body.mode, rules=body.rules, preset=body.preset)
+                                           mode=body.mode, rules=body.rules, preset=body.preset,
+                                           agents=[a.model_dump(exclude_none=True) for a in body.agents],
+                                           app_type=body.app_type, url=body.url)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
         return {"site": registry.public_view(site), "secret_key": secret,
@@ -247,7 +275,10 @@ def build_router(engine: UniversalEngine, registry: SiteRegistry, hooks: Univers
         site_in_tenant(site_id, request)
         try:
             rules = load_preset(body.preset) if body.preset else body.rules
-            site = registry.update(site_id, rules=rules, mode=body.mode, allowed_origins=body.allowed_origins)
+            site = registry.update(
+                site_id, rules=rules, mode=body.mode, allowed_origins=body.allowed_origins, app_type=body.app_type,
+                url=body.url,
+                agents=None if body.agents is None else [a.model_dump(exclude_none=True) for a in body.agents])
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
         return {"site": registry.public_view(site)}
@@ -270,7 +301,8 @@ def build_router(engine: UniversalEngine, registry: SiteRegistry, hooks: Univers
         await websocket.accept()
         stream.clients.append((websocket, tenant))
         try:
-            await websocket.send_json({"type": "universal.snapshot", "data": engine.latest_verdicts(tenant, 50)})
+            await websocket.send_json({"type": "universal.snapshot",
+                                       "data": [enrich(v) for v in engine.latest_verdicts(tenant, 50)]})
             while True:
                 await websocket.receive_text()
         except WebSocketDisconnect:
@@ -278,6 +310,9 @@ def build_router(engine: UniversalEngine, registry: SiteRegistry, hooks: Univers
         finally:
             if (websocket, tenant) in stream.clients:
                 stream.clients.remove((websocket, tenant))
+
+    for extra in extra_routers:
+        router.include_router(extra)
 
     return router
 
