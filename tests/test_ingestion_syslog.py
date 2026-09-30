@@ -34,6 +34,14 @@ def _load_ingestion_main():
 ingestion_main = _load_ingestion_main()
 
 
+def test_data_dir_permission_error_does_not_break_module_usage(monkeypatch):
+    def _deny(*args, **kwargs):
+        raise PermissionError("permission denied")
+
+    monkeypatch.setattr(ingestion_main.os, "makedirs", _deny)
+    assert ingestion_main._ensure_data_dir_exists() is False
+
+
 @pytest.mark.parametrize(
     ("line", "expected_user", "expected_ip", "expected_port"),
     [
