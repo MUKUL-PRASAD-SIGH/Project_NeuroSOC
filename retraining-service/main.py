@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import parse_qs, urlsplit
 
 import numpy as np
 from sklearn.metrics import accuracy_score, f1_score
@@ -50,6 +51,7 @@ log = logging.getLogger(__name__)
 
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
+APP_ENV = os.getenv("APP_ENV", "local").strip().lower()
 RETRAIN_INTERVAL_SECONDS = int(os.getenv("RETRAIN_INTERVAL_SECONDS", "300"))
 RETRAIN_MIN_FEEDBACK_SAMPLES = int(os.getenv("RETRAIN_MIN_FEEDBACK_SAMPLES", "50"))
 MODEL_VERSION_FILE = Path(os.getenv("MODEL_VERSION_FILE", str(MODEL_VERSION_PATH))).expanduser()
@@ -64,6 +66,19 @@ HOLDOUT_EVAL_PATH = Path(
 ).expanduser()
 HOLDOUT_SEED = int(os.getenv("RETRAIN_HOLDOUT_SEED", "20260101"))
 HOLDOUT_SAMPLES_PER_CLASS = int(os.getenv("RETRAIN_HOLDOUT_SAMPLES_PER_CLASS", "40"))
+
+
+def _has_verified_postgres_tls(value: str) -> bool:
+    try:
+        query = parse_qs(urlsplit(value).query)
+    except ValueError:
+        return False
+    sslmode = (query.get("sslmode") or [os.getenv("PGSSLMODE", "")])[-1].strip().lower()
+    ca_path_value = (query.get("sslrootcert") or [os.getenv("PGSSLROOTCERT", "")])[-1].strip()
+    if sslmode != "verify-full" or not ca_path_value:
+        return False
+    ca_path = Path(ca_path_value).expanduser()
+    return ca_path.is_file() and os.access(ca_path, os.R_OK)
 
 
 def utcnow_iso() -> str:
@@ -207,6 +222,8 @@ class PostgresFeedbackRepository:
         self.database_url = database_url
 
     def connect(self):
+        if APP_ENV in {"staging", "production"} and not _has_verified_postgres_tls(self.database_url):
+            raise RuntimeError("Shared deployments require PostgreSQL sslmode=verify-full and a readable server CA certificate.")
         if psycopg2 is None or RealDictCursor is None:
             raise RuntimeError(
                 "psycopg2 is required to connect to PostgreSQL. Install retraining-service requirements first."
@@ -564,7 +581,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    if os.getenv("APP_ENV", "local").strip().lower() in {"staging", "production"}:
+    if APP_ENV in {"staging", "production"}:
         raise RuntimeError("Automatic retraining is disabled in shared deployments until the tenant model-training policy is approved.")
     args = build_arg_parser().parse_args()
     service = RetrainingService(repository=PostgresFeedbackRepository(DATABASE_URL))

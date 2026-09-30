@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RETRAINING_DIR = REPO_ROOT / "retraining-service"
@@ -22,6 +23,17 @@ def load_retraining_main():
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def test_shared_retraining_database_requires_verified_tls(monkeypatch):
+    retraining_main = load_retraining_main()
+    monkeypatch.setattr(retraining_main, "APP_ENV", "production")
+    repository = retraining_main.PostgresFeedbackRepository(
+        "postgresql://retrainer:secret@db.example.com:5432/neurosoc"
+    )
+
+    with pytest.raises(RuntimeError, match="sslmode=verify-full"):
+        repository.connect()
 
 
 def test_holdout_set_is_created_once_and_is_deterministic(tmp_path):

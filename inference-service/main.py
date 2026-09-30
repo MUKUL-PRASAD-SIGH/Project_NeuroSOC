@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any, Literal
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
@@ -197,6 +197,20 @@ def _is_safe_production_database_url(value: str) -> bool:
         )
         is None
     )
+
+
+def _has_verified_postgres_tls(value: str) -> bool:
+    try:
+        parsed = urlsplit(value)
+        query = parse_qs(parsed.query)
+    except ValueError:
+        return False
+    sslmode = (query.get("sslmode") or [os.getenv("PGSSLMODE", "")])[-1].strip().lower()
+    ca_path_value = (query.get("sslrootcert") or [os.getenv("PGSSLROOTCERT", "")])[-1].strip()
+    if sslmode != "verify-full" or not ca_path_value:
+        return False
+    ca_path = Path(ca_path_value).expanduser()
+    return ca_path.is_file() and os.access(ca_path, os.R_OK)
 
 
 def _is_safe_production_redis_url(value: str) -> bool:
@@ -1261,6 +1275,8 @@ class VerdictRepository:
     def _connect(self, tenant_id: str | None = None):
         if not self.database_url:
             return None
+        if APP_ENV in {"staging", "production"} and not _has_verified_postgres_tls(self.database_url):
+            raise RuntimeError("Shared deployments require PostgreSQL sslmode=verify-full and a readable server CA certificate.")
         if psycopg2 is None or RealDictCursor is None:
             raise RuntimeError("psycopg2 is required to persist inference verdicts.")
         conn = psycopg2.connect(
@@ -3073,6 +3089,11 @@ def _validate_startup_configuration() -> None:
         raise RuntimeError("Staging and production require explicit HTTPS CORS_ALLOWED_ORIGINS without wildcards.")
     if not _is_safe_production_database_url(DATABASE_URL):
         raise RuntimeError("Staging and production require a non-demo DATABASE_URL.")
+    if not _has_verified_postgres_tls(DATABASE_URL):
+        raise RuntimeError(
+            "Staging and production require PostgreSQL sslmode=verify-full and a readable server CA certificate "
+            "via sslrootcert or PGSSLROOTCERT."
+        )
     if SANDBOX_BASE_URL and len(SANDBOX_SERVICE_TOKEN) < 32:
         raise RuntimeError(
             "Staging and production require SANDBOX_SERVICE_TOKEN to contain at least 32 characters "

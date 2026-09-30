@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Protocol, Sequence
+from urllib.parse import parse_qs, urlsplit
 
 try:
     import psycopg2
@@ -38,6 +39,19 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "30"))
 FEEDBACK_TOPIC = os.getenv("FEEDBACK_TOPIC", "feedback")
 FEATURE_COLUMNS_PATH = os.getenv("FEATURE_COLUMNS_PATH", "")
+
+
+def _has_verified_postgres_tls(value: str) -> bool:
+    try:
+        query = parse_qs(urlsplit(value).query)
+    except ValueError:
+        return False
+    sslmode = (query.get("sslmode") or [os.getenv("PGSSLMODE", "")])[-1].strip().lower()
+    ca_path_value = (query.get("sslrootcert") or [os.getenv("PGSSLROOTCERT", "")])[-1].strip()
+    if sslmode != "verify-full" or not ca_path_value:
+        return False
+    ca_path = Path(ca_path_value).expanduser()
+    return ca_path.is_file() and os.access(ca_path, os.R_OK)
 
 SQLI_PATTERN = re.compile(
     r"(union\s+select|select\s+.+\s+from|drop\s+table|insert\s+into|delete\s+from|or\s+1\s*=\s*1|--|/\*)",
@@ -261,6 +275,8 @@ class FeedbackRepository:
         self.feature_names = list(feature_names)
 
     def connect(self):
+        if APP_ENV in {"staging", "production"} and not _has_verified_postgres_tls(self.database_url):
+            raise RuntimeError("Shared deployments require PostgreSQL sslmode=verify-full and a readable server CA certificate.")
         if psycopg2 is None or RealDictCursor is None:
             raise RuntimeError(
                 "psycopg2 is required to connect to PostgreSQL. Install feedback-service requirements first."

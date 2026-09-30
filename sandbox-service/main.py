@@ -9,7 +9,9 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
@@ -48,6 +50,19 @@ KAFKA_CLIENT_SECURITY_OPTIONS = kafka_client_security_options(APP_ENV)
 
 EXEMPT_PATH_PREFIXES = ("/health", "/metrics")
 SANDBOX_SERVICE_TOKEN = os.getenv("SANDBOX_SERVICE_TOKEN", "").strip()
+
+
+def _has_verified_postgres_tls(value: str) -> bool:
+    try:
+        query = parse_qs(urlsplit(value).query)
+    except ValueError:
+        return False
+    sslmode = (query.get("sslmode") or [os.getenv("PGSSLMODE", "")])[-1].strip().lower()
+    ca_path_value = (query.get("sslrootcert") or [os.getenv("PGSSLROOTCERT", "")])[-1].strip()
+    if sslmode != "verify-full" or not ca_path_value:
+        return False
+    ca_path = Path(ca_path_value).expanduser()
+    return ca_path.is_file() and os.access(ca_path, os.R_OK)
 
 SESSIONS_CREATED = Counter("neurosoc_sandbox_sessions_created_total", "Sandbox sessions created")
 SESSIONS_ACTIVE = Gauge("neurosoc_sandbox_sessions_active", "Currently active sandbox sessions")
@@ -112,6 +127,8 @@ class SandboxRepository:
     def _connect(self):
         if not self.database_url:
             raise RuntimeError("DATABASE_URL is required for the sandbox service.")
+        if APP_ENV in {"staging", "production"} and not _has_verified_postgres_tls(self.database_url):
+            raise RuntimeError("Shared deployments require PostgreSQL sslmode=verify-full and a readable server CA certificate.")
         if psycopg2 is None or RealDictCursor is None:
             raise RuntimeError("psycopg2 is required to persist sandbox activity.")
         return psycopg2.connect(self.database_url, cursor_factory=RealDictCursor)

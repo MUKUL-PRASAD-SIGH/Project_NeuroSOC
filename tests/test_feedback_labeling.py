@@ -5,6 +5,9 @@ import logging
 import sys
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import quote
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FEEDBACK_DIR = REPO_ROOT / "feedback-service"
@@ -35,6 +38,23 @@ def test_empty_session_gets_a_valid_class_label():
     label = feedback_service.detect_label([])
     assert label.label in CLASS_NAMES
     assert label.label == "OTHER"
+
+
+def test_shared_feedback_database_requires_verified_tls_and_ca(monkeypatch, tmp_path):
+    monkeypatch.setattr(feedback_service, "APP_ENV", "production")
+    repository = feedback_service.FeedbackRepository(
+        "postgresql://feedback:secret@db.example.com:5432/neurosoc", []
+    )
+    with pytest.raises(RuntimeError, match="sslmode=verify-full"):
+        repository.connect()
+
+    ca_file = tmp_path / "postgres-ca.pem"
+    ca_file.write_text("test CA", encoding="utf-8")
+    secure_url = (
+        "postgresql://feedback:secret@db.example.com:5432/neurosoc"
+        f"?sslmode=verify-full&sslrootcert={quote(str(ca_file), safe='')}"
+    )
+    assert feedback_service._has_verified_postgres_tls(secure_url)
 
 
 def test_honeypot_field_label_is_a_valid_class():

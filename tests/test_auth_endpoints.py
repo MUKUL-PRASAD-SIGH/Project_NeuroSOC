@@ -4,6 +4,7 @@ import asyncio
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -818,6 +819,8 @@ def test_audit_repository_uses_parameterized_database_insert(monkeypatch):
 def configure_valid_production_environment(monkeypatch, tmp_path):
     kafka_ca = tmp_path / "trusted-kafka-ca.pem"
     kafka_ca.write_text("test CA bundle", encoding="utf-8")
+    postgres_ca = tmp_path / "trusted-postgres-ca.pem"
+    postgres_ca.write_text("test PostgreSQL CA bundle", encoding="utf-8")
     monkeypatch.setenv("KAFKA_SECURITY_PROTOCOL", "SASL_SSL")
     monkeypatch.setenv("KAFKA_SASL_MECHANISM", "SCRAM-SHA-512")
     monkeypatch.setenv("KAFKA_SASL_USERNAME", "inference-service")
@@ -843,7 +846,8 @@ def configure_valid_production_environment(monkeypatch, tmp_path):
     monkeypatch.setattr(
         inference_main,
         "DATABASE_URL",
-        "postgresql://neurosoc_app:managed-secret@db.example.com:5432/neurosoc",
+        "postgresql://neurosoc_app:managed-secret@db.example.com:5432/neurosoc"
+        f"?sslmode=verify-full&sslrootcert={quote(str(postgres_ca), safe='')}",
     )
     monkeypatch.setattr(inference_main, "SANDBOX_BASE_URL", "http://sandbox.example.com")
     monkeypatch.setattr(inference_main, "SANDBOX_SERVICE_TOKEN", "s" * 32)
@@ -900,6 +904,31 @@ def test_production_startup_rejects_change_me_database_credentials(monkeypatch, 
     )
 
     with pytest.raises(RuntimeError, match="non-demo DATABASE_URL"):
+        inference_main._validate_startup_configuration()
+
+
+def test_production_startup_rejects_postgres_without_verified_tls(monkeypatch, tmp_path):
+    configure_valid_production_environment(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        inference_main,
+        "DATABASE_URL",
+        "postgresql://neurosoc_app:managed-secret@db.example.com:5432/neurosoc?sslmode=require",
+    )
+
+    with pytest.raises(RuntimeError, match="sslmode=verify-full"):
+        inference_main._validate_startup_configuration()
+
+
+def test_production_startup_rejects_missing_postgres_ca_file(monkeypatch, tmp_path):
+    configure_valid_production_environment(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        inference_main,
+        "DATABASE_URL",
+        "postgresql://neurosoc_app:managed-secret@db.example.com:5432/neurosoc"
+        "?sslmode=verify-full&sslrootcert=C%3A%2Fmissing-postgres-ca.pem",
+    )
+
+    with pytest.raises(RuntimeError, match="readable server CA certificate"):
         inference_main._validate_startup_configuration()
 
 

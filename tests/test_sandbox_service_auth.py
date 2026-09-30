@@ -35,6 +35,16 @@ def test_production_sandbox_startup_accepts_a_32_character_token(monkeypatch):
     sandbox_main._validate_startup_configuration()
 
 
+def test_shared_sandbox_database_requires_verified_tls(monkeypatch):
+    monkeypatch.setattr(sandbox_main, "APP_ENV", "production")
+    repository = sandbox_main.SandboxRepository(
+        "postgresql://sandbox:secret@db.example.com:5432/neurosoc"
+    )
+
+    with pytest.raises(RuntimeError, match="sslmode=verify-full"):
+        repository._connect()
+
+
 def test_production_sessions_fail_closed_without_service_token(monkeypatch):
     monkeypatch.setattr(sandbox_main, "APP_ENV", "production")
     monkeypatch.setattr(sandbox_main, "SANDBOX_SERVICE_TOKEN", "")
