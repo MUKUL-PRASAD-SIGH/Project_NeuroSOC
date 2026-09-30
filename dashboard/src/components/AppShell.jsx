@@ -14,13 +14,7 @@ const NAV_ITEMS = [
 function BrandMark() {
   return (
     <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" aria-hidden="true">
-      <path
-        d="M12 2.5 4 5.5v6c0 4.7 3.3 8.8 8 10 4.7-1.2 8-5.3 8-10v-6l-8-3Z"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinejoin="round"
-      />
-      <path d="M8.5 12.2 11 14.6l4.6-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4 4l16 16M20 4 4 20M12 2v20M2 12h20" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   );
 }
@@ -43,7 +37,7 @@ function ConnectionStatus() {
     <span
       role="status"
       aria-label={DEMO_DATA_ENABLED ? "Demo data stream" : `${label} alert stream`}
-      className="inline-flex items-center gap-2 rounded-md border border-soc-border bg-soc-panelSoft px-2.5 py-1 text-xs text-soc-muted"
+      className="inline-flex items-center gap-2 rounded-full border border-soc-border bg-soc-panelSoft px-3 py-1 text-xs text-soc-muted"
     >
       <span className={connected && !DEMO_DATA_ENABLED ? "soc-live-dot" : "inline-block h-2 w-2 rounded-full bg-soc-amber"} />
       <span className="text-soc-text">{label}</span>
@@ -59,13 +53,7 @@ function UserBadge() {
 
   if (!isAuthenticated) {
     return (
-      <button
-        type="button"
-        onClick={doSignIn}
-        className="rounded-md border border-soc-electric/50 px-2.5 py-1 text-xs font-medium text-soc-electric transition hover:bg-soc-electric/10"
-      >
-        Sign in
-      </button>
+      <button type="button" onClick={doSignIn} className="soc-btn-primary">Sign in</button>
     );
   }
 
@@ -78,7 +66,7 @@ function UserBadge() {
       <button
         type="button"
         onClick={doSignOut}
-        className="rounded-md border border-soc-border/70 px-2.5 py-1 text-xs font-medium text-soc-muted transition hover:bg-soc-panelSoft"
+        className="rounded-xl border border-soc-border/70 px-2.5 py-1 text-xs font-medium text-soc-muted transition hover:bg-soc-panelSoft"
       >
         Sign out
       </button>
@@ -90,14 +78,14 @@ function TopBar() {
   const now = useClock();
 
   return (
-    <header className="sticky top-0 z-40 border-b border-soc-border bg-soc-bg/90 backdrop-blur">
+    <header className="sticky top-0 z-40 border-b border-soc-border bg-[#05070d]/75 backdrop-blur-xl">
       <div className="mx-auto flex min-h-14 w-full max-w-[1680px] flex-wrap items-center gap-x-6 px-4 md:px-6 lg:px-8">
         <div className="flex items-center gap-2.5">
-          <span className="flex h-8 w-8 items-center justify-center rounded-md bg-soc-electric/15 text-soc-electric">
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-b from-[#7aa8ff] to-[#2f5fe0] text-white shadow-[0_6px_24px_-6px_rgba(91,147,255,0.9)]">
             <BrandMark />
           </span>
           <div className="leading-tight">
-            <p className="text-sm font-semibold tracking-tight text-soc-text">NeuroSOC</p>
+            <p className="text-sm font-medium tracking-tight text-soc-text">NeuroSOC</p>
             <p className="text-[11px] text-soc-muted">Security Operations</p>
           </div>
         </div>
@@ -123,7 +111,7 @@ function TopBar() {
 
         <div className="ml-auto flex h-14 items-center gap-3">
           <ConnectionStatus />
-          <span className="hidden font-mono text-xs text-soc-muted soc-tabular md:inline">
+          <span className="hidden  text-xs text-soc-muted soc-tabular md:inline">
             {now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
           </span>
           <UserBadge />
@@ -185,7 +173,7 @@ export default function AppShell() {
         <main className="soc-shell flex min-h-[60vh] items-center justify-center">
           <div className="soc-glass max-w-sm p-6 text-center">
             <p className="soc-kicker">Sign-in required</p>
-            <h1 className="mt-2 text-lg font-semibold text-soc-text">Sign in to continue</h1>
+            <h1 className="mt-2 text-lg font-medium text-soc-text">Sign in to continue</h1>
             <p className="mt-2 text-sm text-soc-muted">
               This deployment requires a Keycloak session to view live security data.
             </p>
@@ -200,8 +188,8 @@ export default function AppShell() {
       <TopBar />
       <main className="soc-shell">
         {DEMO_DATA_ENABLED ? (
-          <aside className="mb-5 rounded-md border border-soc-amber/35 bg-soc-amber/5 px-4 py-3 text-xs leading-relaxed text-soc-muted">
-            <span className="font-semibold text-soc-amber">Demo data.</span> Seeded events refresh locally. Analyst decisions stay in this browser and are not written to the backend.
+          <aside className="mb-5 flex items-center gap-2 rounded-full border border-soc-border bg-soc-panel px-4 py-2 text-xs leading-relaxed text-soc-muted">
+            <span className="h-1.5 w-1.5 rounded-full bg-soc-electric" /><span className="font-medium text-soc-text">Demo data.</span> Seeded events refresh locally. Analyst decisions stay in this browser and are not written to the backend.
           </aside>
         ) : null}
         <Outlet />

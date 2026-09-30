@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import CardSwap, { SwapCard } from '../components/CardSwap';
 
 const MEDIA = `${import.meta.env.BASE_URL}media`;
 const tabular = { fontVariantNumeric: 'tabular-nums' as const };
@@ -138,23 +139,33 @@ export function Hero() {
             <a href="#features" className="text-white/80 underline-offset-4 hover:text-white hover:underline">
               Explore features
             </a>
+            <a href="#security" className="text-white/60 underline-offset-4 hover:text-white hover:underline">
+              How protection works
+            </a>
             <Link to="/system-flow" className="text-white/60 underline-offset-4 hover:text-white hover:underline">
               How protection works
             </Link>
           </div>
         </div>
 
-        <div className="relative mx-auto aspect-square w-full max-w-[520px]">
+        <div className="relative mx-auto hidden h-[440px] w-full max-w-[520px] md:block">
           <div
-            className="absolute inset-[8%] rounded-full opacity-80 blur-2xl"
+            className="absolute inset-[10%] rounded-full opacity-60 blur-3xl"
             style={{ background: 'radial-gradient(circle at 30% 30%,#ffc233,#ff5a1f 60%,transparent 72%)' }}
           />
-          <img
-            src={`${MEDIA}/card-hand.jpg`}
-            alt="A translucent NovaTrust card held in a hand"
-            className="absolute inset-0 h-full w-full rounded-[2rem] object-cover shadow-2xl shadow-black/60 ring-1 ring-white/10 [mask-image:radial-gradient(circle_at_50%_50%,#000_62%,transparent_100%)]"
-          />
-          <GlassCard className="absolute -bottom-6 -left-10 hidden rotate-[-8deg] sm:block" />
+          <CardSwap width={340} height={230} cardDistance={44} verticalDistance={50} delay={4500} pauseOnHover>
+            <SwapCard className="overflow-hidden">
+              <img src={`${MEDIA}/card-black.jpg`} alt="NovaTrust black card" className="h-full w-full object-cover" />
+            </SwapCard>
+            <SwapCard className="overflow-hidden">
+              <img src={`${MEDIA}/card-hand.jpg`} alt="NovaTrust card in hand" className="h-full w-full object-cover" />
+            </SwapCard>
+            <SwapCard className="flex flex-col justify-between bg-gradient-to-br from-[#1b1d2a] to-[#07080d] p-5 text-white">
+              <span className="text-xs text-white/50">Available balance</span>
+              <span className="text-3xl font-semibold" style={tabular}>$24,092.67</span>
+              <span className="text-xs text-emerald-300">Protected by NeuroShield</span>
+            </SwapCard>
+          </CardSwap>
         </div>
       </div>
 
@@ -267,9 +278,9 @@ export function Cards() {
 }
 
 const OUTCOMES = [
-  ['Normal', 'You continue straight to your account.'],
-  ['Unusual', 'The session pauses briefly for review; reloading restores access.'],
-  ['Likely attack', 'The session is moved to an isolated environment and recorded for analysts.'],
+  ['Continuous protection', 'Every sign-in and payment is checked in real time against how you normally bank.'],
+  ['Instant alerts', 'We let you know straight away if something does not look like you.'],
+  ['Around-the-clock team', 'Our security specialists review unusual activity 24 hours a day.'],
 ];
 
 export function SecurityExplainer() {
@@ -277,10 +288,10 @@ export function SecurityExplainer() {
     <section id="security" className="border-t border-white/10 bg-[#07080d]/70 backdrop-blur-sm">
       <div className="mx-auto grid max-w-6xl gap-10 px-6 py-24 md:grid-cols-2">
         <div>
-          <h2 className="text-3xl font-semibold tracking-tight text-white">How we protect your session</h2>
+          <h2 className="text-3xl font-semibold tracking-tight text-white">How we protect your account</h2>
           <p className="mt-4 text-sm leading-relaxed text-white/60">
-            Each session is scored by a set of models (SNN, LNN and XGBoost) using network and behavioural signals.
-            The result decides what happens next.
+            Security runs quietly in the background of every session, learning how you normally bank so genuine
+            customers are never slowed down.
           </p>
         </div>
         <ol className="space-y-5 text-sm">

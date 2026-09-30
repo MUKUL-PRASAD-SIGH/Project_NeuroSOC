@@ -32,7 +32,7 @@ export default function ModelStatusCard() {
             ["Evaluation report", "Awaiting verified metrics"],
             ["Inference service", "Awaiting integration"],
           ].map(([label, value]) => (
-            <div key={label} className="rounded-md border border-soc-border/80 bg-soc-panelSoft/50 p-3.5">
+            <div key={label} className="rounded-xl border border-soc-border/80 bg-soc-panelSoft/50 p-3.5">
               <p className="text-xs text-soc-muted">{label}</p>
               <p className="mt-2 text-sm font-medium text-soc-text">{value}</p>
             </div>
@@ -67,7 +67,7 @@ export default function ModelStatusCard() {
           versions.map((version) => (
             <div key={version.label} className="flex items-center justify-between gap-4 py-2">
               <dt className="text-xs text-soc-muted">{version.label}</dt>
-              <dd className="truncate font-mono text-xs text-soc-text" title={version.value}>
+              <dd className="truncate  text-xs text-soc-text" title={version.value}>
                 {version.value}
               </dd>
             </div>
@@ -87,7 +87,7 @@ export default function ModelStatusCard() {
                   <div className="h-1.5 rounded-full bg-soc-panelSoft">
                     <div className="h-1.5 rounded-full bg-soc-electric" style={{ width: `${Math.min(Math.max(value * 100, 2), 100)}%` }} />
                   </div>
-                  <span className="soc-tabular text-right font-mono text-xs text-soc-muted">{value.toFixed(2)}</span>
+                  <span className="soc-tabular text-right  text-xs text-soc-muted">{value.toFixed(2)}</span>
                 </div>
               );
             })}

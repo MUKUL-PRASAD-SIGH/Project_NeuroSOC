@@ -21,6 +21,30 @@ CLASS_NAMES = [
     "OTHER",
 ]
 
+
+
+class ClassOrderEncoder:
+    """Encode class names as their index in CLASS_NAMES.
+
+    Inference decodes predictions with CLASS_NAMES[index] (inference-service/core/engine.py,
+    core/xgboost/model.py), so training must use the same order. sklearn's LabelEncoder sorts
+    names alphabetically, which silently relabels most classes. Same interface as the subset of
+    LabelEncoder the training code uses (`fit`, `transform`, `classes_`).
+    """
+
+    classes_ = np.asarray(CLASS_NAMES)
+
+    def fit(self, _labels=None) -> "ClassOrderEncoder":
+        return self
+
+    def transform(self, labels) -> np.ndarray:
+        index = {name: position for position, name in enumerate(CLASS_NAMES)}
+        unknown = sorted({str(label) for label in labels} - set(index))
+        if unknown:
+            raise ValueError(f"Unknown class labels {unknown}; expected a subset of {CLASS_NAMES}.")
+        return np.array([index[str(label)] for label in labels], dtype=np.int64)
+
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INFERENCE_SERVICE_DIR = REPO_ROOT / "inference-service"
 MODELS_DIR = REPO_ROOT / "models"
@@ -77,6 +101,56 @@ def train_val_split(
         test_size=test_size,
         stratify=labels,
         random_state=random_state,
+    )
+
+
+def subsample_stratified(
+    features: np.ndarray,
+    labels: np.ndarray,
+    max_rows: int,
+    random_state: int = 42,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Keep at most `max_rows` rows, preserving class proportions (0 = keep all)."""
+    if max_rows <= 0 or len(features) <= max_rows:
+        return features, labels
+    keep, _ = train_test_split(
+        np.arange(len(features)),
+        train_size=max_rows,
+        stratify=labels,
+        random_state=random_state,
+    )
+    keep.sort()
+    return features[keep], labels[keep]
+
+
+def balanced_class_weights(encoded_labels: np.ndarray, n_classes: int) -> np.ndarray:
+    """Inverse-frequency weights (mean 1 over classes present); absent classes get 1.0."""
+    counts = np.bincount(encoded_labels, minlength=n_classes).astype(np.float64)
+    present = counts > 0
+    weights = np.ones(n_classes, dtype=np.float64)
+    weights[present] = counts[present].sum() / (present.sum() * counts[present])
+    return weights.astype(np.float32)
+
+
+def pad_absent_classes(
+    features: np.ndarray,
+    encoded_labels: np.ndarray,
+    sample_weight: np.ndarray | None,
+    n_classes: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Append one zero-weight row per class missing from the labels.
+
+    XGBoost's sklearn wrapper needs labels 0..n-1 to all occur, but the model keeps the
+    full CLASS_NAMES output (including classes such as OTHER that the data never contains).
+    """
+    weights = np.ones(len(encoded_labels), dtype=np.float32) if sample_weight is None else sample_weight
+    missing = np.setdiff1d(np.arange(n_classes), np.unique(encoded_labels))
+    if len(missing) == 0:
+        return features, encoded_labels, weights
+    return (
+        np.vstack([features, np.repeat(features[:1], len(missing), axis=0)]),
+        np.concatenate([encoded_labels, missing]),
+        np.concatenate([weights, np.zeros(len(missing), dtype=np.float32)]),
     )
 
 

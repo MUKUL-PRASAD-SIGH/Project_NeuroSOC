@@ -64,3 +64,9 @@ inference-service/main_system.py
 inference-service/test_policy.py
 data/check_latest.py
 retraining-service/results/
+
+# Raw and processed training datasets (large; keep local)
+data/CICIDS2017/
+data/CICDDoS2019/
+datasets/raw/
+datasets/processed/

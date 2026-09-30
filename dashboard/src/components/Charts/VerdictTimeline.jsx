@@ -10,12 +10,12 @@ import {
 import { useMemo } from "react";
 
 const SERIES = [
-  { key: "HACKER", label: "Threat", color: "#ef5b67" },
-  { key: "FORGETFUL_USER", label: "Review", color: "#e9a93b" },
-  { key: "LEGITIMATE", label: "Normal", color: "#4fa8f7" },
+  { key: "HACKER", label: "Threat", color: "#e6edff" },
+  { key: "FORGETFUL_USER", label: "Review", color: "#7ea6ff" },
+  { key: "LEGITIMATE", label: "Normal", color: "#5b93ff" },
 ];
 
-const AXIS = { fill: "#8a96ab", fontSize: 11 };
+const AXIS = { fill: "#8a93a8", fontSize: 11 };
 
 export default function VerdictTimeline({ data }) {
   const rows = Array.isArray(data) ? data : [];
@@ -59,7 +59,7 @@ export default function VerdictTimeline({ data }) {
                 </linearGradient>
               ))}
             </defs>
-            <CartesianGrid stroke="#232c40" strokeDasharray="3 3" vertical={false} />
+            <CartesianGrid stroke="#1a2233" strokeDasharray="3 3" vertical={false} />
             <XAxis
               dataKey="time"
               tickFormatter={(value) =>
@@ -72,15 +72,15 @@ export default function VerdictTimeline({ data }) {
             />
             <YAxis allowDecimals={false} tick={AXIS} tickLine={false} axisLine={false} width={40} />
             <Tooltip
-              cursor={{ stroke: "#2a3448" }}
+              cursor={{ stroke: "#2a3450" }}
               contentStyle={{
-                background: "#111726",
-                border: "1px solid #232c40",
+                background: "#0a0e18",
+                border: "1px solid #1a2233",
                 borderRadius: "6px",
-                color: "#e6ebf4",
+                color: "#eef2fa",
                 fontSize: 12,
               }}
-              labelStyle={{ color: "#8a96ab", marginBottom: 4 }}
+              labelStyle={{ color: "#8a93a8", marginBottom: 4 }}
               formatter={(value, name) => [value, SERIES.find((s) => s.key === name)?.label || name]}
               labelFormatter={(value) => new Date(value).toLocaleString()}
             />
