@@ -230,3 +230,13 @@ def test_extension_origins_need_an_explicit_opt_in(setup):
     denied = client.post(f"/api/v1/sdk/events?key={setup['site']['publishable_key']}", json={"events": [_claim()]},
                          headers={"Origin": extension})
     assert denied.status_code == 403
+
+
+def test_a_shadowed_session_is_mirrored_to_the_sandbox_once(setup):
+    client, pk = setup["client"], setup["site"]["publishable_key"]
+    bot = {"events": [{"type": "keydown", "timestamp": 1000 + i * 40, "key": "char"} for i in range(20)]}
+    headers = {"X-NeuroSOC-Key": pk, "Origin": SITE_ORIGIN}
+    for _ in range(4):
+        client.post("/api/v1/sdk/events", json={"events": [_claim(session="session-mirror", telemetry=bot)]}, headers=headers)
+    mirrored = [v for v in setup["shadowed"] if v["session_id"] == "session-mirror"]
+    assert len(mirrored) == 1

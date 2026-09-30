@@ -138,6 +138,8 @@ def build_router(engine: UniversalEngine, registry: SiteRegistry, hooks: Univers
             cached = engine.verdict(tenant, cached_id)
             if cached:
                 return cached
+        previous = engine.session_verdict(tenant, event["session_id"])
+        already_shadowed = bool(previous and previous.get("action") == "shadow")
         verdict = await run_in_threadpool(engine.process, event, mode=site.get("mode", "observe"))
         engine.kv.set(idempotency_key, verdict["verdict_id"], ttl=IDEMPOTENCY_TTL)
 
@@ -146,7 +148,8 @@ def build_router(engine: UniversalEngine, registry: SiteRegistry, hooks: Univers
                 hooks.publish(schema_view(event))
             except Exception as exc:
                 log.warning("Could not publish behavior event: %s", type(exc).__name__)
-        if verdict["action"] == "shadow" and verdict["enforced"] and hooks.on_shadow is not None:
+        # Mirror a session into the sandbox once, when it first becomes shadowed, not on every event.
+        if verdict["action"] == "shadow" and verdict["enforced"] and not already_shadowed and hooks.on_shadow is not None:
             await run_in_threadpool(hooks.on_shadow, verdict, client_ip)
         deliver_webhooks(site, verdict)
         await stream.broadcast(tenant, {"type": "universal.verdict", "data": verdict})
