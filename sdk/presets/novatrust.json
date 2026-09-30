@@ -1,0 +1,9 @@
+{
+  "name": "NovaTrust simulated bank",
+  "description": "Rules for the NovaTrust portal in simulation_portal/, applied through the Lens extension so the portal's code is not edited.",
+  "rules": [
+    { "match": { "url": "*/login*", "event": "submit" }, "action": "auth.login", "resource": { "type": "account", "id_from": "const:novatrust-login", "sensitivity": "medium" } },
+    { "match": { "url": "*/transfer*", "event": "submit" }, "action": "token.transfer", "resource": { "type": "account", "id_from": "const:novatrust-transfer", "sensitivity": "high" } },
+    { "match": { "url": "*", "event": "click", "text": ["log out", "logout", "sign out"] }, "action": "auth.logout", "resource": { "type": "account", "id_from": "const:novatrust" } }
+  ]
+}

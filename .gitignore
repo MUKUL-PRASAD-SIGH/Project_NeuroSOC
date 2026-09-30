@@ -37,6 +37,7 @@ Thumbs.db
 # Documentation: only the root README.md is published
 *.md
 !/README.md
+!/sdk/README.md
 Docs/
 docs/
 builderA/

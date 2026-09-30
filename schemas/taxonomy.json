@@ -1,0 +1,16 @@
+{
+  "version": "1.0",
+  "description": "Fixed action vocabulary for behavior.event (schema v1.3). Every platform maps its own events onto these actions so one behavioral engine can score them all.",
+  "categories": {
+    "navigation": ["session.start", "page.view", "form.submit"],
+    "identity": ["account.create", "auth.login", "auth.logout", "wallet.connect", "wallet.sign"],
+    "engagement": ["campaign.join", "task.complete", "reward.claim", "referral.create"],
+    "value": ["token.buy", "token.sell", "token.transfer", "liquidity.add", "liquidity.remove"],
+    "agent": ["agent.run", "agent.tool_call", "agent.config_change"],
+    "admin": ["permission.change", "api_key.create", "api.call"]
+  },
+  "entity_types": ["human", "agent", "wallet", "service"],
+  "results": ["success", "failure", "denied"],
+  "sensitivities": ["low", "medium", "high", "critical"],
+  "instruction_sources": ["owner", "system", "external_content"]
+}
