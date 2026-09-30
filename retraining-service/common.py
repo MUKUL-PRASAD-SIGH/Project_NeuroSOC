@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import QuantileTransformer
 
 
 CLASS_NAMES = [
@@ -152,6 +153,39 @@ def pad_absent_classes(
         np.concatenate([encoded_labels, missing]),
         np.concatenate([weights, np.zeros(len(missing), dtype=np.float32)]),
     )
+
+
+def fit_quantile_transform(features: np.ndarray, n_quantiles: int = 500, max_rows: int = 200_000, seed: int = 42):
+    """Fit a rank-based (uniform) transform on [rows, F] or [windows, steps, F] MinMax-scaled features.
+
+    Flow features are heavy-tailed, so after MinMax scaling most values sit in the first few percent of
+    [0, 1] and the spike encoder / reservoir cannot tell them apart. Ranking spreads them evenly.
+    """
+    rows = features.reshape(-1, features.shape[-1])
+    if len(rows) > max_rows:
+        rows = rows[np.random.default_rng(seed).choice(len(rows), max_rows, replace=False)]
+    return QuantileTransformer(
+        n_quantiles=min(n_quantiles, len(rows)), output_distribution="uniform", random_state=seed
+    ).fit(rows)
+
+
+def apply_quantile_transform(transform, features: np.ndarray) -> np.ndarray:
+    shape = features.shape
+    return transform.transform(features.reshape(-1, shape[-1])).reshape(shape).astype(np.float32)
+
+
+def save_preprocessor(artifact_path: Path, feature_names: list[str], scaler_path: Path, quantile) -> bool:
+    """Save <artifact>.preproc.pkl so inference can turn a live raw vector into this model's input."""
+    import joblib
+
+    add_inference_service_to_path()
+    from core.preprocessing import FeaturePreprocessor
+
+    if not Path(scaler_path).exists():
+        print(f"[WARN] No scaler at {scaler_path}; this candidate cannot score raw live features.")
+        return False
+    FeaturePreprocessor(feature_names, joblib.load(scaler_path), quantile).save(artifact_path)
+    return True
 
 
 def make_sliding_windows(
