@@ -42,6 +42,7 @@ SANDBOX_TIMEOUT_SEC = int(os.getenv("SANDBOX_TIMEOUT_SEC", "300"))
 HOST = os.getenv("SANDBOX_HOST", "0.0.0.0")
 PORT = int(os.getenv("SANDBOX_PORT", "8001"))
 FEEDBACK_TRIGGER_TOPIC = os.getenv("FEEDBACK_TRIGGER_TOPIC", "feedback-trigger")
+APP_ENV = os.getenv("APP_ENV", "local").strip().lower()
 
 EXEMPT_PATH_PREFIXES = ("/health", "/metrics")
 SANDBOX_SERVICE_TOKEN = os.getenv("SANDBOX_SERVICE_TOKEN", "").strip()
@@ -803,6 +804,7 @@ def _html_or_json_response(request: Request, path: str, method: str, body: Any =
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global _expiry_thread
+    _validate_startup_configuration()
     manager.start()
     _stop_event.clear()
 
@@ -829,13 +831,23 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="NeuroShield Sandbox", version="0.2.0", lifespan=lifespan)
 
 
+def _validate_startup_configuration() -> None:
+    if APP_ENV not in {"local", "test", "staging", "production"}:
+        raise RuntimeError("APP_ENV must be local, test, staging, or production.")
+    if APP_ENV in {"staging", "production"} and len(SANDBOX_SERVICE_TOKEN) < 32:
+        raise RuntimeError(
+            "Staging and production require SANDBOX_SERVICE_TOKEN to contain at least 32 characters."
+        )
+
+
 @app.middleware("http")
 async def sandbox_token_middleware(request: Request, call_next):
     if request.url.path.startswith("/sessions"):
         # Session create/terminate/replay is inference-service-to-sandbox-service traffic,
         # never attacker traffic -- gate it on a shared service token instead of the
-        # attacker-facing sandbox token. SANDBOX_SERVICE_TOKEN unset (local dev default)
-        # leaves this open, matching the rest of the codebase's opt-in auth pattern.
+        # attacker-facing sandbox token. A blank token is allowed only in local/test mode.
+        if APP_ENV in {"staging", "production"} and len(SANDBOX_SERVICE_TOKEN) < 32:
+            return JSONResponse(status_code=503, content={"detail": "Service authentication is unavailable"})
         if SANDBOX_SERVICE_TOKEN:
             provided = request.headers.get("x-service-token", "")
             if provided != SANDBOX_SERVICE_TOKEN:

@@ -12,6 +12,36 @@ client = TestClient(sandbox_main.app)
 @pytest.fixture(autouse=True)
 def _reset_service_token(monkeypatch):
     monkeypatch.setattr(sandbox_main, "SANDBOX_SERVICE_TOKEN", "")
+    monkeypatch.setattr(sandbox_main, "APP_ENV", "local")
+
+
+def test_local_sandbox_startup_allows_unconfigured_service_token():
+    sandbox_main._validate_startup_configuration()
+
+
+@pytest.mark.parametrize("token", ["", "too-short"])
+def test_production_sandbox_startup_requires_a_strong_service_token(monkeypatch, token):
+    monkeypatch.setattr(sandbox_main, "APP_ENV", "production")
+    monkeypatch.setattr(sandbox_main, "SANDBOX_SERVICE_TOKEN", token)
+
+    with pytest.raises(RuntimeError, match="SANDBOX_SERVICE_TOKEN"):
+        sandbox_main._validate_startup_configuration()
+
+
+def test_production_sandbox_startup_accepts_a_32_character_token(monkeypatch):
+    monkeypatch.setattr(sandbox_main, "APP_ENV", "production")
+    monkeypatch.setattr(sandbox_main, "SANDBOX_SERVICE_TOKEN", "s" * 32)
+
+    sandbox_main._validate_startup_configuration()
+
+
+def test_production_sessions_fail_closed_without_service_token(monkeypatch):
+    monkeypatch.setattr(sandbox_main, "APP_ENV", "production")
+    monkeypatch.setattr(sandbox_main, "SANDBOX_SERVICE_TOKEN", "")
+
+    response = client.post("/sessions", json={"user_id": "attacker"})
+
+    assert response.status_code == 503
 
 
 def test_sessions_route_is_open_when_no_service_token_is_configured(monkeypatch):

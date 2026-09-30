@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any, Literal
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
@@ -171,6 +171,28 @@ def _parse_trusted_proxy_ips(value: str) -> str:
         if value not in normalized:
             normalized.append(value)
     return ",".join(normalized)
+
+
+def _is_safe_production_database_url(value: str) -> bool:
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        _port = parsed.port
+        username = unquote(parsed.username or "").strip()
+        password = unquote(parsed.password or "")
+    except ValueError:
+        return False
+    if parsed.scheme not in {"postgresql", "postgres"} or not hostname or not username or not password:
+        return False
+    credentials = f"{username} {password}"
+    return (
+        re.search(
+            r"(?:change[_-]?me|ns[_-]pass|ns[_-]user|your[_-]?password)",
+            credentials,
+            re.IGNORECASE,
+        )
+        is None
+    )
 
 
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
@@ -2589,12 +2611,13 @@ def _validate_startup_configuration() -> None:
     parsed_origins = [urlsplit(origin) for origin in ALLOWED_ORIGINS]
     if any(origin.scheme != "https" for origin in parsed_origins):
         raise RuntimeError("Staging and production require explicit HTTPS CORS_ALLOWED_ORIGINS without wildcards.")
-    if (
-        not DATABASE_URL.startswith(("postgresql://", "postgres://"))
-        or "ns_pass" in DATABASE_URL
-        or "ns_user" in DATABASE_URL
-    ):
+    if not _is_safe_production_database_url(DATABASE_URL):
         raise RuntimeError("Staging and production require a non-demo DATABASE_URL.")
+    if SANDBOX_BASE_URL and len(SANDBOX_SERVICE_TOKEN) < 32:
+        raise RuntimeError(
+            "Staging and production require SANDBOX_SERVICE_TOKEN to contain at least 32 characters "
+            "when SANDBOX_BASE_URL is configured."
+        )
 
 
 def _is_simulation_api(path: str) -> bool:

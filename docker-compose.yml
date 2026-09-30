@@ -217,6 +217,7 @@ services:
       - ALL
     pids_limit: 128
     environment:
+      APP_ENV: ${APP_ENV:-local}
       KAFKA_BOOTSTRAP: kafka:9092
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in your .env file (see .env.example)}
       SANDBOX_TIMEOUT_SEC: "300"

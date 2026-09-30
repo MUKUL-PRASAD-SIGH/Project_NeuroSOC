@@ -678,6 +678,8 @@ def configure_valid_production_environment(monkeypatch):
         "DATABASE_URL",
         "postgresql://neurosoc_app:managed-secret@db.example.com:5432/neurosoc",
     )
+    monkeypatch.setattr(inference_main, "SANDBOX_BASE_URL", "http://sandbox.example.com")
+    monkeypatch.setattr(inference_main, "SANDBOX_SERVICE_TOKEN", "s" * 32)
 
 
 def test_production_startup_accepts_explicit_secure_configuration(monkeypatch):
@@ -691,6 +693,15 @@ def test_production_startup_rejects_simulation_api(monkeypatch):
     monkeypatch.setattr(inference_main, "ENABLE_SIMULATION_API", True)
 
     with pytest.raises(RuntimeError, match="Simulation APIs"):
+        inference_main._validate_startup_configuration()
+
+
+@pytest.mark.parametrize("token", ["", "too-short"])
+def test_production_startup_rejects_missing_or_weak_sandbox_service_token(monkeypatch, token):
+    configure_valid_production_environment(monkeypatch)
+    monkeypatch.setattr(inference_main, "SANDBOX_SERVICE_TOKEN", token)
+
+    with pytest.raises(RuntimeError, match="SANDBOX_SERVICE_TOKEN"):
         inference_main._validate_startup_configuration()
 
 
@@ -708,6 +719,18 @@ def test_production_startup_rejects_wildcard_cors_and_demo_database(monkeypatch)
 
     monkeypatch.setattr(inference_main, "ALLOWED_ORIGINS", ["https://soc.example.com"])
     monkeypatch.setattr(inference_main, "DATABASE_URL", "postgresql://ns_user:ns_pass@db/neurosoc")
+
+    with pytest.raises(RuntimeError, match="non-demo DATABASE_URL"):
+        inference_main._validate_startup_configuration()
+
+
+def test_production_startup_rejects_change_me_database_credentials(monkeypatch):
+    configure_valid_production_environment(monkeypatch)
+    monkeypatch.setattr(
+        inference_main,
+        "DATABASE_URL",
+        "postgresql://neurosoc_app:CHANGE_ME_local_postgres_password@db.example.com:5432/neurosoc",
+    )
 
     with pytest.raises(RuntimeError, match="non-demo DATABASE_URL"):
         inference_main._validate_startup_configuration()
