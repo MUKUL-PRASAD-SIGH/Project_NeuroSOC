@@ -7,7 +7,7 @@ FIXES vs v1:
   2. PCAP mode: no-file case → synthetic data generator (keeps container live
      and Kafka verifiable without real PCAP files on first run)
   3. CORS: added GET to allow_methods (health endpoint was blocked)
-  4. DATA_DIR auto-created on startup (no more path-not-found crash)
+  4. DATA_DIR auto-created when PCAP mode starts (no more path-not-found crash)
   5. Synthetic generator sends every 2s with realistic dummy values
 
 CHECKPOINT:
@@ -91,8 +91,18 @@ if APP_ENV in {"staging", "production"} and INGESTION_TENANT_ID == "local":
 if APP_ENV in {"staging", "production"} and INGESTION_MODE in {"bank_portal", "all"}:
     raise RuntimeError("Unauthenticated bank-portal ingestion is local/test only; use tenant-assigned sensor ingress.")
 
-# Ensure DATA_DIR exists — FIX: path-not-found crash on first run
-os.makedirs(DATA_DIR, exist_ok=True)
+def _ensure_data_dir_exists() -> bool:
+    """Best-effort DATA_DIR creation for PCAP mode."""
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+    except OSError as exc:
+        log.warning(
+            "⚠️  Could not prepare DATA_DIR %s (%s). Falling back to synthetic traffic.",
+            DATA_DIR,
+            exc,
+        )
+        return False
+    return True
 
 
 # ─── Kafka producer ───────────────────────────────────────────────────────────
@@ -207,6 +217,10 @@ def run_pcap_mode(producer: KafkaProducer) -> None:
     """Stream packets from all .pcap files in DATA_DIR.
     FIX: if no files found, falls into synthetic generator instead of returning.
     """
+    if not _ensure_data_dir_exists():
+        run_synthetic_mode(producer)
+        return
+
     try:
         from scapy.utils import PcapReader
         from scapy.layers.inet import IP
