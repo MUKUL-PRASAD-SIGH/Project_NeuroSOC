@@ -1,0 +1,20 @@
+# Build context for services built from the repo root (currently only retraining-service).
+# Without this, `COPY data ./data` baked 22 GB of raw CIC datasets into a 36 GB image.
+.git
+**/__pycache__
+**/node_modules
+*.docx
+.serena
+sdk
+docs
+dashboard
+simulation_portal
+data/CICIDS2017
+data/CICDDoS2019
+data/retraining_state.json
+data/behavioral_profiles
+# Training data stays out of the image: retraining falls back to its synthetic base corpus unless a base
+# dataset is mounted and RETRAIN_BASE_DATASET points at it. (The 76-feature CIC corpus cannot be stacked
+# with the daemon's 80-feature feedback rows.)
+datasets/raw
+datasets/processed
