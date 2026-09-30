@@ -49,6 +49,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 os.environ.setdefault("BEHAVIOR_PROFILE_DIR", str(REPO_ROOT / "data" / "behavioral_profiles"))
 
 from core.behavioral.signals import extract_session_vector
+from core.novatrust_repository import NovaTrustRepository
 from core.engine import DecisionEngine, ThreatVerdict
 from core.xgboost.model import CLASS_NAMES as TRAINING_CLASS_NAMES
 from core.auth import (
@@ -232,6 +233,7 @@ def _is_safe_production_redis_url(value: str) -> bool:
 
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
+novatrust_repo = NovaTrustRepository(DATABASE_URL)
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 RATE_LIMIT_HASH_SECRET = os.getenv("RATE_LIMIT_HASH_SECRET", "")
 INPUT_TOPIC = os.getenv("INFERENCE_INPUT_TOPIC", "extracted-features")
@@ -262,6 +264,12 @@ MAX_REQUEST_BODY_BYTES = _read_positive_int_env("API_MAX_REQUEST_BODY_BYTES", "1
 API_RATE_LIMIT_PER_MINUTE = _read_positive_int_env("API_RATE_LIMIT_PER_MINUTE", "120")
 SANDBOX_BASE_URL = os.getenv("SANDBOX_BASE_URL", "").rstrip("/")
 SANDBOX_SERVICE_TOKEN = os.getenv("SANDBOX_SERVICE_TOKEN", "").strip()
+# Universal behavioral engine behind the NeuroSOC SDK (api/routes/universal.py). Off by default:
+# when false, no SDK route, middleware or storage is added and the service behaves as before.
+ENABLE_UNIVERSAL_ENGINE = _read_bool_env("ENABLE_UNIVERSAL_ENGINE", "false")
+UNIVERSAL_HASH_SECRET = os.getenv("UNIVERSAL_HASH_SECRET", "").strip()
+UNIVERSAL_SITES_FILE = os.getenv("UNIVERSAL_SITES_FILE", "").strip()
+BEHAVIOR_EVENTS_TOPIC = os.getenv("BEHAVIOR_EVENTS_TOPIC", "behavior-events")
 IPINFO_TOKEN = os.getenv("IPINFO_TOKEN", "").strip()
 SANDBOX_TIMEOUT_SECONDS = int(os.getenv("SANDBOX_TIMEOUT_SEC", "300"))
 PORTAL_SESSION_TTL_SECONDS = int(os.getenv("PORTAL_SESSION_TTL_SECONDS", "1800"))
@@ -306,17 +314,6 @@ BEHAVIOR_DIMENSIONS = [
     "Peer Similarity",
     "Recovery Abuse",
 ]
-
-def _load_simulation_accounts() -> dict[str, dict[str, Any]]:
-    if not ENABLE_SIMULATION_API:
-        return {}
-    from core.simulation_accounts import BANK_ACCOUNTS
-
-    return BANK_ACCOUNTS
-
-
-BANK_ACCOUNTS = _load_simulation_accounts()
-
 
 Identifier = Annotated[StrictStr, Field(min_length=1, max_length=256)]
 SessionIdentifier = Annotated[StrictStr, Field(min_length=1, max_length=128)]
@@ -2031,11 +2028,7 @@ sandbox_gateway = SandboxGateway(SANDBOX_BASE_URL, SANDBOX_SERVICE_TOKEN) if SAN
 
 
 def _account_for_user(user_id: str) -> dict[str, Any] | None:
-    normalized = user_id.strip().lower()
-    for account in BANK_ACCOUNTS.values():
-        if normalized in {account["email"].lower(), account["user_id"].lower()}:
-            return account
-    return None
+    return novatrust_repo.get_account_by_user_id(user_id.strip().lower())
 
 
 def _display_name_for_user(user_id: str) -> str:
@@ -2525,6 +2518,8 @@ class InferenceRuntime:
 
     def start(self) -> None:
         self.repository.bootstrap()
+        if ENABLE_SIMULATION_API:
+            novatrust_repo.bootstrap()
         self._ensure_producer()
         self.engine.start_model_monitor()
         if self._consumer_thread is None or not self._consumer_thread.is_alive():
@@ -3104,6 +3099,11 @@ def _validate_startup_configuration() -> None:
             "Staging and production require SANDBOX_SERVICE_TOKEN to contain at least 32 characters "
             "when SANDBOX_BASE_URL is configured."
         )
+    if ENABLE_UNIVERSAL_ENGINE and len(UNIVERSAL_HASH_SECRET) < 32:
+        raise RuntimeError(
+            "Staging and production require UNIVERSAL_HASH_SECRET with at least 32 characters "
+            "when ENABLE_UNIVERSAL_ENGINE is true."
+        )
 
 
 def _is_simulation_api(path: str) -> bool:
@@ -3448,8 +3448,11 @@ async def api_key_middleware(request: Request, call_next):
     if not ENABLE_SIMULATION_API and _is_simulation_api(canonical_path):
         return Response(status_code=status.HTTP_404_NOT_FOUND, content="Simulation endpoint is disabled.")
 
+    # SDK routes are called from customer websites and agents with NeuroSOC site keys, which the
+    # universal router verifies itself; they never carry a Keycloak token or the service API key.
+    sdk_route = ENABLE_UNIVERSAL_ENGINE and canonical_path.startswith("/api/v1/sdk/")
     admin_operation = set(required_roles_for_route(canonical_path, request.method)) == set(MODEL_ADMIN_ROLES)
-    if (OIDC_REQUIRED or admin_operation) and not _api_key_exempt(request.url.path):
+    if (OIDC_REQUIRED or admin_operation) and not sdk_route and not _api_key_exempt(request.url.path):
         oidc = _oidc_config()
         if oidc is None:
             await _record_http_audit_event(
@@ -3495,7 +3498,7 @@ async def api_key_middleware(request: Request, call_next):
         ):
             return _audit_unavailable_response()
 
-    if API_KEY and not _api_key_exempt(canonical_path):
+    if API_KEY and not sdk_route and not _api_key_exempt(canonical_path):
         if request.headers.get("x-api-key") != API_KEY:
             await _record_http_audit_event(
                 request,
@@ -3863,7 +3866,7 @@ def get_user_verdict(user_id: str, request: Request) -> dict[str, Any]:
 
 @app.post("/api/v1/bank/login", response_model=BankLoginResponse)
 def bank_login(request: BankLoginRequest, response: Response) -> dict[str, Any]:
-    account = BANK_ACCOUNTS.get(request.email.strip().lower())
+    account = novatrust_repo.get_account(request.email.strip().lower())
     authenticated = bool(account and account["password"] == request.password)
     session = portal_state.record_login_attempt(request.email, request.password, request.session_id, request.source_ip, authenticated)
 
@@ -3890,9 +3893,11 @@ def bank_login(request: BankLoginRequest, response: Response) -> dict[str, Any]:
     if sandbox:
         payload["account"] = _decoy_account(user_id, account, session)
     elif account and authenticated:
+        txs = novatrust_repo.get_transactions(user_id)
         payload["account"] = {
             "balance": account["balance"],
             "accountMasked": account["account_masked"],
+            "transactions": txs
         }
     if not authenticated and not sandbox:
         payload["error"] = "Invalid credentials."
@@ -3924,6 +3929,15 @@ def bank_transfer(request: BankTransferRequest, response: Response) -> dict[str,
     elif verdict.verdict != "LEGITIMATE" or request.amount >= 10000:
         status = "suspicious"
         message = "Transfer pending manual review."
+    else:
+        novatrust_repo.record_transfer(request.user_id, request.amount, request.destination, request.memo)
+        account = novatrust_repo.get_account_by_user_id(request.user_id)
+        if account:
+            account_payload = {
+                "balance": account["balance"],
+                "accountMasked": account["account_masked"],
+                "transactions": novatrust_repo.get_transactions(request.user_id)
+            }
 
     return {
         "status": status,
@@ -4265,9 +4279,63 @@ def get_profile(user_id: str, request: Request) -> dict[str, Any]:
     return profile.to_payload()
 
 
+def _universal_roles(request: Request) -> set[str] | None:
+    identity = getattr(request.state, "identity", None)
+    if identity is None:
+        return None  # no OIDC in this deployment (local/test): nothing to check against
+    return set(identity.get("roles") or identity.get("realm_access", {}).get("roles", []))
+
+
+def _universal_publish(event: dict[str, Any]) -> None:
+    # Reuse the runtime's producer only once it is connected, so a missing broker never adds
+    # connection timeouts to SDK calls.
+    if runtime._producer is not None:
+        runtime._publish(BEHAVIOR_EVENTS_TOPIC, event)
+
+
+def _universal_on_shadow(verdict: dict[str, Any], client_ip: str | None) -> None:
+    if sandbox_gateway is None:
+        return
+    try:
+        sandbox_gateway.create_session(verdict["session_id"], verdict["entity"]["id"], client_ip or "unknown")
+    except RuntimeError as exc:
+        log.warning("Universal shadow session was not mirrored to the sandbox: %s", exc)
+
+
+async def _universal_audit(request: Request, event_type: str, outcome: str, details: dict[str, Any]) -> bool:
+    return await _record_http_audit_event(request, event_type, outcome, details=details)
+
+
+if ENABLE_UNIVERSAL_ENGINE:
+    from api.routes.universal import UniversalHooks, build_router as build_universal_router
+    from core.universal import SiteRegistry, UniversalEngine, build_kv, load_scorer
+    from core.universal.cors import SdkCorsMiddleware
+
+    _universal_kv = build_kv(REDIS_CLIENT)
+    universal_sites = SiteRegistry(_universal_kv)
+    if UNIVERSAL_SITES_FILE:
+        log.info("Seeded %d SDK site(s) from %s.", universal_sites.seed_from_file(UNIVERSAL_SITES_FILE), UNIVERSAL_SITES_FILE)
+    universal_engine = UniversalEngine(_universal_kv, load_scorer())
+    app.include_router(build_universal_router(universal_engine, universal_sites, UniversalHooks(
+        hash_secret=UNIVERSAL_HASH_SECRET or "neurosoc-local-universal-hash-secret",
+        tenant_of=_request_tenant_id,
+        roles_of=_universal_roles,
+        client_ip=lambda request: request.client.host if request.client is not None else None,
+        authorize_websocket=_authorize_websocket,
+        websocket_tenant=_websocket_tenant_id,
+        on_shadow=_universal_on_shadow,
+        publish=_universal_publish,
+        audit=_universal_audit,
+    )))
+    app.add_middleware(SdkCorsMiddleware, origin_allowed=universal_sites.origin_allowed_anywhere)
+    log.info("Universal behavioral engine enabled (scorer: %s).", universal_engine.scorer.name)
+
+
 if __name__ == "__main__":
+    # Pass the app object, not "main:app": the string form makes uvicorn import this file a
+    # second time as "main", which registers the Prometheus metrics twice and crashes startup.
     uvicorn.run(
-        "main:app",
+        app,
         host=HOST,
         port=PORT,
         reload=False,

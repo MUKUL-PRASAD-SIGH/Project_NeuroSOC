@@ -1,0 +1,15 @@
+{
+  "name": "CyreneAI",
+  "description": "Best-effort rules for CyreneAI's public launchpad, campaign and raise pages. Built from the public site without access to its source, so it matches on URL patterns and visible button text rather than internal class names. Verify by browsing with the Lens extension in observe mode and adjust from the dashboard.",
+  "rules": [
+    { "match": { "url": "*", "event": "click", "text": ["connect wallet", "connect"] }, "action": "wallet.connect", "resource": { "type": "site", "id_from": "const:cyreneai" } },
+    { "match": { "url": "*campaign*", "event": "click", "text": ["join", "participate", "start"] }, "action": "campaign.join", "resource": { "type": "campaign", "id_from": "url:path" } },
+    { "match": { "url": "*campaign*", "event": "click", "text": ["submit proof", "submit", "complete", "verify"] }, "action": "task.complete", "resource": { "type": "campaign", "id_from": "url:path" } },
+    { "match": { "url": "*", "event": "click", "text": ["claim"] }, "action": "reward.claim", "resource": { "type": "campaign", "id_from": "url:path", "sensitivity": "medium" } },
+    { "match": { "url": "*", "event": "click", "text": ["refer", "invite", "create referral"] }, "action": "referral.create", "resource": { "type": "referral", "id_from": "url:path" } },
+    { "match": { "url": "*", "event": "click", "text": ["buy"] }, "action": "token.buy", "resource": { "type": "token", "id_from": "url:path", "sensitivity": "high" } },
+    { "match": { "url": "*", "event": "click", "text": ["sell"] }, "action": "token.sell", "resource": { "type": "token", "id_from": "url:path", "sensitivity": "high" } },
+    { "match": { "url": "*", "event": "click", "text": ["invest", "commit", "contribute"] }, "action": "token.buy", "resource": { "type": "raise", "id_from": "url:path", "sensitivity": "high" } },
+    { "match": { "url": "*", "event": "submit" }, "action": "form.submit", "resource": { "type": "form", "id_from": "url:path" } }
+  ]
+}

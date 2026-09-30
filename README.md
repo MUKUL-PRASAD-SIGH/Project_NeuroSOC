@@ -254,64 +254,54 @@ flowchart LR
 
 ---
 
-## 🔁 Real-World Flow: Hacker vs. Forgetful User
+## 🔁 The NeuroSOC Interactive Sandbox: User Personas
 
-A hard operational problem is telling a **malicious actor** apart from a **legitimate user acting oddly**. Click a character to replay the 2 AM scenario:
+A hard operational problem is telling a **malicious actor** apart from a **legitimate user acting oddly**. NeuroSOC's sandboxing mechanism dynamically isolates sessions based on behavioral drift, tricking attackers while safely handling confused users.
+
+Here is how the system treats three distinct user personas:
 
 <details>
-<summary><b>👤 Normal user: Priya logs in from her usual phone at 10 PM</b></summary>
+<summary><b>1️⃣ The Normal User (e.g., Priya)</b></summary>
 
-```text
-→ Login from known device, known IP, normal hour
-→ SNN: no spike  │  LNN: delta near zero
-→ SIEM: no alert │  XGBoost: Normal
-→ ✅ Access granted, event logged as P4 (baseline update)
-```
-
+**Behavior:** Logs in from her usual phone at a normal hour to check her balance.
+**NeuroSOC Reaction:** 
+- The Liquid Neural Network (LNN) recognizes her pattern. The Spiking Neural Network (SNN) sees no burst activity.
+- **Verdict:** Access granted. The event is logged quietly to update her baseline.
 </details>
 
 <details>
-<summary><b>🤦 Notorious user: Raj, an ex-employee who forgot he left</b></summary>
+<summary><b>2️⃣ The Dumb/Forgetful User (e.g., Raj, ex-employee)</b></summary>
 
-```text
-→ Login attempt at 2 AM, wrong password ×3, old device
-→ SNN: mild spike  │  LNN: moderate drift from Raj's baseline
-→ SIEM: P3 alert, "Repeated fail, known device, off-hours"
-→ XGBoost: Notorious (not attacker, low confidence)
-→ After 5 attempts → escalates to P2 → sandbox shows "account locked"
-→ Raj stops. Behavior fits confusion, not exploitation
-→ 9 AM: analyst clicks [Restore] → password reset + 2FA
-```
-
+**Behavior:** Tries to log in at 2 AM using an old device and fails the password 4 times because he forgot his access was revoked.
+**NeuroSOC Reaction:** 
+- The SNN detects a mild spike. The LNN detects moderate drift from Raj's usual baseline.
+- **Escalation:** The system raises a medium alert, then high upon repeated failure.
+- **Sandboxing Action:** Raj is seamlessly moved to a **Decoy Sandbox**. He is shown an "Account Locked" page. Raj gets confused and stops trying. 
+- **Morning Review:** The analyst sees Raj stopped and confirms it was just confusion. No real data was ever at risk.
 </details>
 
 <details>
-<summary><b>💀 External hacker: credential stuffing from a TOR exit node</b></summary>
+<summary><b>3️⃣ The Malicious Hacker (e.g., Credential Stuffer)</b></summary>
 
-```text
-→ 2 AM, 400 login attempts/min across 80 accounts
-→ SNN: MASSIVE spike  │  LNN: no history, unfamiliar trajectory
-→ SIEM: P1, "Mass credential stuffing"
-→ XGBoost: External attacker, confidence 0.97
-→ All sessions silently diverted to the sandbox and shown a fake vault
-→ Every action captured → attack pattern mapped → IOCs extracted
-→ 9 AM: "Attack fully documented, 0 real data touched"
-```
-
+**Behavior:** Uses a script from a TOR exit node to attempt 400 logins a minute across 80 different accounts.
+**NeuroSOC Reaction:** 
+- The SNN detects a MASSIVE spike. The LNN sees a completely unfamiliar and dangerous trajectory.
+- **Escalation:** Immediate Critical Alert!
+- **Sandboxing Action:** The attacker is instantly diverted into the honeypot sandbox. 
+- **Deception:** Instead of blocking the attacker immediately (which tells them they are caught), the sandbox serves fake data and a dummy vault. The attacker wastes time trying to exploit the fake vault while NeuroSOC captures their tools, techniques, and IOCs.
+- **Morning Review:** The analyst arrives at 9 AM to a fully documented attack report. Zero real data was touched.
 </details>
-
-| Signal | Notorious user 🤦 | Hacker 💀 |
-|---|---|---|
-| Password failure speed | Human pace, gaps of about 10 s | Scripted, gaps under 100 ms |
-| Device / IP history | Seen before | New, often TOR/VPN |
-| Accounts targeted | Only their own | Many, including admin paths |
-| Behavior after sandboxing | Stops and waits | Keeps probing and pivots |
-| LNN behavioral delta | Low | High |
-| Alert tier | P3 → P2 | P1 immediately |
-
-<p align="right"><a href="#top">⬆ back to top</a></p>
 
 ---
+
+## ✨ Core Features Catalog
+
+* **Local Keycloak OIDC Foundation:** RBAC roles (`analyst`, `operator`, `admin`, `auditor`) with robust API role enforcement.
+* **Security Audit Events:** Immutable logging of auth outcomes and model changes in PostgreSQL.
+* **SNN + LNN Inference:** Spiking networks for speed, Liquid networks for temporal behavior, XGBoost for threat classification.
+* **Honeypot Sandbox:** Intelligent session diversion that traps attackers in a simulated environment.
+* **Analyst Dashboard:** Real-time alert queues, behavioral drift analysis, and model health metrics.
+* **Versioned API Routes:** Strict request/response contracts (`/api/v1`) with bounds on request size and rate limits.
 
 ## 🌙 Autonomous Overnight Loop
 

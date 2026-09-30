@@ -998,4 +998,6 @@ async def catch_all(path: str, request: Request) -> Response:
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host=HOST, port=PORT, reload=False)
+    # Pass the app object, not "main:app": the string form imports this file a second time and
+    # registers the Prometheus metrics twice, which crashes startup.
+    uvicorn.run(app, host=HOST, port=PORT, reload=False)

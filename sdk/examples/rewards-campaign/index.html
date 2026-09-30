@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Early Access Campaign · NeuroSOC SDK example</title>
+  <style>
+    :root { --bg: #0b0f17; --card: #131a26; --line: #243044; --text: #e7ecf3; --muted: #93a1b5; --accent: #7c5cff; --good: #22c55e; --warn: #f59e0b; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+    header { display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; border-bottom: 1px solid var(--line); }
+    header b { letter-spacing: .02em; }
+    .tag { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; }
+    main { max-width: 640px; margin: 32px auto; padding: 0 16px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; margin-bottom: 16px; }
+    h1 { font-size: 24px; margin: 0 0 4px; }
+    h2 { font-size: 15px; margin: 0 0 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+    p { margin: 0 0 12px; color: var(--muted); }
+    button { font: inherit; color: var(--text); background: #1d2636; border: 1px solid var(--line); border-radius: 10px; padding: 9px 14px; cursor: pointer; }
+    button:hover { border-color: var(--accent); }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+    button.done { border-color: var(--good); color: var(--good); }
+    button:disabled { opacity: .5; cursor: default; }
+    input, textarea { width: 100%; font: inherit; color: var(--text); background: #0f1520; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; margin-bottom: 10px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .wallet { font-family: ui-monospace, monospace; font-size: 13px; color: var(--muted); }
+    .result { display: none; margin-top: 14px; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line); }
+    .result.paid { display: block; border-color: var(--good); color: var(--good); }
+    .result.pending { display: block; border-color: var(--warn); color: var(--warn); }
+    footer { text-align: center; color: var(--muted); font-size: 12px; margin: 32px 0; }
+    code { font-size: 12px; }
+  </style>
+  <!-- The whole NeuroSOC install: one script tag. -->
+  <script src="/sdk.js" data-key="{{PUBLISHABLE_KEY}}" data-endpoint="{{ENDPOINT}}" async></script>
+</head>
+<body>
+  <header><b>Aurora Protocol</b><span class="tag">NeuroSOC SDK example · not a real campaign</span></header>
+  <main data-campaign="early-access" data-reward="25">
+    <div class="card">
+      <h1>Early Access Campaign</h1>
+      <p>Complete three steps and claim <b>25 AUR</b>. One reward per person.</p>
+    </div>
+
+    <div class="card">
+      <h2>1 · Connect wallet</h2>
+      <div class="row" style="align-items:center">
+        <button id="connect-wallet">Connect wallet</button>
+        <span class="wallet" id="wallet-address">Demo wallet, generated in the page</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>2 · Your profile</h2>
+      <form id="profile-form">
+        <input name="handle" placeholder="Your handle" autocomplete="off" required>
+        <textarea name="why" rows="2" placeholder="What would you build with Aurora?" required></textarea>
+        <button type="submit">Save profile</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>3 · Tasks</h2>
+      <div class="row">
+        <button data-task="follow">Follow on X</button>
+        <button data-task="discord">Join Discord</button>
+        <button data-task="try">Try the testnet app</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <button class="primary" id="claim" disabled>Claim 25 AUR</button>
+      <div class="result" id="result"></div>
+    </div>
+  </main>
+  <footer>Protected by NeuroSOC · install: <code>&lt;script src="…/neurosoc.min.js" data-key="pk_…"&gt;</code></footer>
+
+  <script>
+    // Page logic for the example. The only NeuroSOC-specific lines are identify() and guard().
+    const state = { wallet: null, profile: false, tasks: new Set() };
+    const $ = (s) => document.querySelector(s);
+    const ready = () => { $("#claim").disabled = !(state.wallet && state.profile && state.tasks.size === 3); };
+
+    $("#connect-wallet").addEventListener("click", () => {
+      const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+      state.wallet = state.wallet || Array.from({ length: 44 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
+      $("#wallet-address").textContent = state.wallet.slice(0, 6) + "…" + state.wallet.slice(-4);
+      $("#connect-wallet").classList.add("done");
+      window.neurosoc?.identify({ id: state.wallet, type: "human" });
+      ready();
+    });
+    $("#profile-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      state.profile = true;
+      $("#profile-form button").classList.add("done");
+      $("#profile-form button").textContent = "Saved";
+      ready();
+    });
+    document.querySelectorAll("[data-task]").forEach((button) => button.addEventListener("click", () => {
+      state.tasks.add(button.dataset.task);
+      button.classList.add("done");
+      ready();
+    }));
+
+    $("#claim").addEventListener("click", async () => {
+      $("#claim").disabled = true;
+      // Record the claim and wait until NeuroSOC has scored it...
+      await window.neurosoc?.guard({ action: "reward.claim", resource: { id: "early-access", type: "campaign", sensitivity: "medium" }, value: { amount: 25 } });
+      // ...then let our own backend decide, using the secret key. The browser is never trusted.
+      const response = await fetch("/claim", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session: window.neurosoc?.sessionId, wallet: state.wallet }) });
+      const body = await response.json();
+      const box = $("#result");
+      box.className = "result " + (body.status === "paid" ? "paid" : "pending");
+      box.textContent = body.status === "paid" ? `25 AUR sent to ${state.wallet.slice(0, 6)}…` : "Your claim is pending review. Rewards are usually processed within 48 hours.";
+    });
+  </script>
+</body>
+</html>

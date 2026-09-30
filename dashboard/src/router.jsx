@@ -1,12 +1,14 @@
 import { lazy, Suspense } from "react";
 import { createBrowserRouter } from "react-router-dom";
 import AppShell from "./components/AppShell";
+import { UNIVERSAL_ENABLED } from "./lib/featureFlags";
 
 const DashboardPage = lazy(() => import("./pages/Dashboard"));
 const IntelFeedPage = lazy(() => import("./pages/IntelFeed"));
 const ResponseOpsPage = lazy(() => import("./pages/ResponseOps"));
 const NotFoundPage = lazy(() => import("./pages/NotFound"));
 const AuthCallbackPage = lazy(() => import("./pages/AuthCallback"));
+const ProtectionPage = lazy(() => import("./pages/Protection"));
 
 function LazyPage({ children }) {
   return (
@@ -53,6 +55,16 @@ const router = createBrowserRouter([
           </LazyPage>
         ),
       },
+      ...(UNIVERSAL_ENABLED
+        ? [{
+            path: "protection",
+            element: (
+              <LazyPage>
+                <ProtectionPage />
+              </LazyPage>
+            ),
+          }]
+        : []),
       {
         path: "*",
         element: (

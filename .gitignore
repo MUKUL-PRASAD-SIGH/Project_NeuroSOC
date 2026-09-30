@@ -37,6 +37,9 @@ Thumbs.db
 # Documentation: only the root README.md is published
 *.md
 !/README.md
+!/sdk/README.md
+!/sdk/python/README.md
+!/sdk/js/README.md
 Docs/
 docs/
 builderA/
@@ -69,3 +72,8 @@ data/CICIDS2017/
 data/CICDDoS2019/
 datasets/raw/
 datasets/processed/
+
+# Simulation files and runs
+sim_*.py
+simulation_portal/
+simulation_runs/

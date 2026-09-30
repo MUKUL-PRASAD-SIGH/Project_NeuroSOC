@@ -1,0 +1,59 @@
+{
+  "name": "@neurosoc/sdk",
+  "version": "0.1.0",
+  "description": "Drop-in behavioral security for any website: tells people from bots and bot farms, and reports to the NeuroSOC engine.",
+  "license": "Apache-2.0",
+  "author": "NeuroSOC Team",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC.git",
+    "directory": "sdk/js"
+  },
+  "homepage": "https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC/tree/main/sdk",
+  "bugs": {
+    "url": "https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC/issues"
+  },
+  "keywords": [
+    "security",
+    "bot-detection",
+    "fraud",
+    "behavioral-analytics",
+    "web3"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/types/index.d.ts",
+  "jsdelivr": "./dist/neurosoc.min.js",
+  "unpkg": "./dist/neurosoc.min.js",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/index.mjs"
+    },
+    "./script": "./dist/neurosoc.min.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": [
+    "./dist/neurosoc.min.js"
+  ],
+  "scripts": {
+    "build": "node build.mjs && tsc -p tsconfig.json --emitDeclarationOnly",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test test/sdk.test.mjs",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "jsdom": "^25.0.1",
+    "playwright-core": "^1.63.0",
+    "typescript": "^5.6.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
