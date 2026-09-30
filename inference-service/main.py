@@ -4332,8 +4332,10 @@ if ENABLE_UNIVERSAL_ENGINE:
 
 
 if __name__ == "__main__":
+    # Pass the app object, not "main:app": the string form makes uvicorn import this file a
+    # second time as "main", which registers the Prometheus metrics twice and crashes startup.
     uvicorn.run(
-        "main:app",
+        app,
         host=HOST,
         port=PORT,
         reload=False,
