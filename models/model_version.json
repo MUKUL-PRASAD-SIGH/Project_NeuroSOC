@@ -1,14 +1,14 @@
 {
-  "version": "1.0.2",
-  "snn": "snn_legacy_v1.pt",
-  "lnn": "lnn_legacy_v1.pt",
+  "version": "1.0.4",
+  "snn": "candidates/snn_candidate_20260930T182228_f8c4939d.pt",
+  "lnn": "candidates/lnn_candidate_20260930T182400_d17a8f7e.pt",
   "xgb": "candidates/xgb_candidate_20260930T101408_6abb8505.json",
   "validation_f1": {
-    "snn": null,
-    "lnn": null,
+    "snn": 0.7290469969945917,
+    "lnn": 0.7490461527219895,
     "xgb": 0.9606264275587494
   },
-  "timestamp": "2026-09-30T10:52:28.193555+00:00",
+  "timestamp": "2026-09-30T18:30:23.256121+00:00",
   "artifact_format": "legacy-v1",
   "artifact_source": "artifacts/artifacts",
   "feedback_training": {

@@ -37,6 +37,13 @@ def main() -> int:
         x, y = data["x_test"], data["y_test"]
     # Same encoding as the training scripts (and as inference): index in CLASS_NAMES.
     encoder = ClassOrderEncoder().fit(CLASS_NAMES)
+    preprocessor_path = args.checkpoint.with_suffix(args.checkpoint.suffix + ".preproc.pkl")
+    if preprocessor_path.exists():  # windows in sequences.npz are MinMax-scaled; models trained with the quantile step need it
+        import joblib
+
+        quantile = joblib.load(preprocessor_path)["quantile"]
+        if quantile is not None:
+            x = quantile.transform(x.reshape(-1, x.shape[2])).reshape(x.shape).astype(np.float32)
     target = encoder.transform(y)
     predictions = []
     with torch.no_grad():

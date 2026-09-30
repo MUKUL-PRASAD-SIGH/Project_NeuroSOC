@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from pathlib import Path
 
@@ -15,12 +16,16 @@ from common import (
     CLASS_NAMES,
     DATASET_TRAIN_PATH,
     MODEL_VERSION_PATH,
+    REPO_ROOT,
     add_inference_service_to_path,
+    apply_quantile_transform,
     balanced_class_weights,
     candidate_artifact_path,
+    fit_quantile_transform,
     generate_synthetic_dataset,
     load_tabular_dataset,
     make_sliding_windows,
+    save_preprocessor,
     subsample_stratified,
     train_val_split,
     write_model_candidate,
@@ -56,6 +61,8 @@ def parse_args() -> argparse.Namespace:
         help="sequences.npz from datasets/build_sequences.py (real windows, block-level train/test split).",
     )
     parser.add_argument("--max-rows", type=int, default=0, help="Stratified row cap before windowing (0 = all).")
+    parser.add_argument("--no-quantile", action="store_true", help="Skip the quantile transform of the inputs.")
+    parser.add_argument("--scaler-path", type=Path, default=REPO_ROOT / "datasets" / "scaler.pkl")
     parser.add_argument("--class-weight", action="store_true", help="Weight the loss by inverse class frequency.")
     return parser.parse_args()
 
@@ -104,6 +111,12 @@ def main() -> int:
         features, labels = subsample_stratified(features, labels, args.max_rows)
         windows, window_labels = make_sliding_windows(features, labels, window_size=args.window_size)
         x_train, x_val, y_train, y_val = train_val_split(windows, window_labels)
+
+    quantile = None
+    if not args.no_quantile:
+        quantile = fit_quantile_transform(x_train)
+        x_train = apply_quantile_transform(quantile, x_train)
+        x_val = apply_quantile_transform(quantile, x_val)
 
     label_encoder = ClassOrderEncoder()
     label_encoder.fit(CLASS_NAMES)
@@ -175,12 +188,12 @@ def main() -> int:
                     "feature_names": feature_names,
                     "window_size": args.window_size,
                 },
-                "reservoir_state": reservoir.state_dict(),
+                "reservoir_state": copy.deepcopy(reservoir.state_dict()),
                 "classifier_config": {
                     "reservoir_size": classifier.reservoir_size,
                     "n_classes": classifier.n_classes,
                 },
-                "classifier_state": classifier.state_dict(),
+                "classifier_state": copy.deepcopy(classifier.state_dict()),
             }
 
     if best_payload is None:
@@ -188,6 +201,8 @@ def main() -> int:
 
     candidate_path = candidate_artifact_path("lnn", args.model_path, args.version_file)
     torch.save(best_payload, candidate_path)
+    if not args.smoke_test:
+        save_preprocessor(candidate_path, feature_names, args.scaler_path, quantile)
     candidate = write_model_candidate(
         "lnn",
         candidate_path,
