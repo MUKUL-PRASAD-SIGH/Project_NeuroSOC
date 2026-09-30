@@ -1,7 +1,6 @@
 import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { BankFooter, BankHeader } from '../components/BankChrome';
-import { Hero, SecurityExplainer, Services } from './LandingSections';
+import { BackgroundVideo, Cards, Faq, Hero, LandingFooter, LandingHeader, SecurityExplainer, Services } from './LandingSections';
 
 // Honeypot canary: exposed as a fake CSRF token so scrapers that harvest it can be traced.
 const CANARY_TOKEN = 'NT_CANARY_7f8e9d2a1b3c4e5f6g7h8i9j0k';
@@ -23,12 +22,17 @@ export default function Landing() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-white text-slate-900 antialiased" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
-      <BankHeader />
+    <div className="min-h-screen scroll-smooth bg-[#07080d] text-white antialiased" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
+      <BackgroundVideo />
+      <div className="relative z-10">
+      <LandingHeader />
       <Hero />
       <Services />
+      <Cards />
       <SecurityExplainer />
-      <BankFooter />
+      <Faq />
+      <LandingFooter />
+      </div>
       {/* Hidden honeypot link: only automated crawlers follow it. */}
       <a href="/internal/staff-portal" style={{ display: 'none' }} aria-hidden="true">
         Staff Portal
