@@ -141,6 +141,31 @@ def test_promote_updates_manifest_and_activates_model(protected_client, promotio
     assert any(event["event_type"] == "security.model_promotion" for event in protected_client.audit_events)
 
 
+def test_promote_restores_previous_model_when_success_audit_fails(protected_client, promotion_env, monkeypatch):
+    original_record_audit = inference_main.runtime.repository.record_audit_event
+
+    def fail_promotion_success(event):
+        if event.get("event_type") == "security.model_promotion" and event.get("outcome") == "succeeded":
+            raise RuntimeError("audit store unavailable")
+        original_record_audit(event)
+
+    monkeypatch.setattr(inference_main.runtime.repository, "record_audit_event", fail_promotion_success)
+    response = protected_client.post(
+        "/api/v1/models/candidates/xgb_candidate_test/promote",
+        headers={"Authorization": "Bearer platform-admin"},
+    )
+
+    assert response.status_code == 503
+    assert json.loads(promotion_env["version_path"].read_text(encoding="utf-8"))["version"] == "1.0.1"
+    candidate = json.loads(
+        (promotion_env["candidates_dir"] / "xgb_candidate_test.manifest.json").read_text(encoding="utf-8")
+    )
+    assert candidate["status"] == "pending_approval"
+    assert list(promotion_env["history_dir"].glob("*.json")) == []
+    assert inference_main.runtime.engine.current_model_version == "1.0.1"
+    assert [call["version"] for call in promotion_env["force_activate_calls"]] == ["1.0.2", "1.0.1"]
+
+
 def test_promote_unknown_candidate_returns_404(protected_client, promotion_env):
     response = protected_client.post(
         "/api/v1/models/candidates/does-not-exist/promote",
@@ -177,6 +202,27 @@ def test_reject_marks_candidate_without_touching_active_manifest(protected_clien
     assert promotion_env["force_activate_calls"] == []
 
 
+def test_reject_restores_candidate_when_success_audit_fails(protected_client, promotion_env, monkeypatch):
+    original_record_audit = inference_main.runtime.repository.record_audit_event
+
+    def fail_rejection_success(event):
+        if event.get("event_type") == "security.model_rejection" and event.get("outcome") == "succeeded":
+            raise RuntimeError("audit store unavailable")
+        original_record_audit(event)
+
+    monkeypatch.setattr(inference_main.runtime.repository, "record_audit_event", fail_rejection_success)
+    response = protected_client.post(
+        "/api/v1/models/candidates/xgb_candidate_test/reject",
+        headers={"Authorization": "Bearer platform-admin"},
+    )
+
+    assert response.status_code == 503
+    candidate = json.loads(
+        (promotion_env["candidates_dir"] / "xgb_candidate_test.manifest.json").read_text(encoding="utf-8")
+    )
+    assert candidate["status"] == "pending_approval"
+
+
 def test_rollback_restores_previous_manifest(protected_client, promotion_env):
     promote_response = protected_client.post(
         "/api/v1/models/candidates/xgb_candidate_test/promote",
@@ -201,6 +247,36 @@ def test_rollback_restores_previous_manifest(protected_client, promotion_env):
     # The snapshot is consumed on rollback.
     assert list(promotion_env["history_dir"].glob("*.json")) == []
     assert promotion_env["force_activate_calls"][-1]["version"] == "1.0.1"
+
+
+def test_rollback_restores_active_manifest_and_snapshot_when_success_audit_fails(
+    protected_client, promotion_env, monkeypatch
+):
+    promoted = protected_client.post(
+        "/api/v1/models/candidates/xgb_candidate_test/promote",
+        headers={"Authorization": "Bearer platform-admin"},
+    )
+    assert promoted.status_code == 200
+
+    original_record_audit = inference_main.runtime.repository.record_audit_event
+
+    def fail_rollback_success(event):
+        if event.get("event_type") == "security.model_rollback" and event.get("outcome") == "succeeded":
+            raise RuntimeError("audit store unavailable")
+        original_record_audit(event)
+
+    monkeypatch.setattr(inference_main.runtime.repository, "record_audit_event", fail_rollback_success)
+    response = protected_client.post(
+        "/api/v1/models/rollback",
+        headers={"Authorization": "Bearer platform-admin"},
+    )
+
+    assert response.status_code == 503
+    assert json.loads(promotion_env["version_path"].read_text(encoding="utf-8"))["version"] == "1.0.2"
+    assert inference_main.runtime.engine.current_model_version == "1.0.2"
+    snapshots = list(promotion_env["history_dir"].glob("*.json"))
+    assert len(snapshots) == 1
+    assert json.loads(snapshots[0].read_text(encoding="utf-8"))["version"] == "1.0.1"
 
 
 def test_rollback_with_no_history_returns_404(protected_client, promotion_env):

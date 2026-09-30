@@ -450,6 +450,7 @@ OIDC_REQUIRED=true
 - When the sandbox service is configured, staging/production also require the same randomly generated `SANDBOX_SERVICE_TOKEN` (at least 32 characters) in inference and sandbox; local/test can leave it blank.
 - `CORS_ALLOWED_ORIGINS` accepts explicit HTTP(S) origins only. `TRUSTED_PROXY_IPS` accepts IPs or CIDRs only.
 - Shared model reload and promotion endpoints require the separate **platform-admin** role. Tenant admins cannot change models used by every tenant.
+- Candidate promotion, rejection, and rollback write an audited attempt before changing state, then require a success audit event. Candidate, active-manifest, and rollback-history files are restored when the final audit write fails.
 - In shared mode, every OIDC access token must carry a signed `tenant_id` claim. The local Keycloak realm export maps the administrator-managed `tenant_id` user attribute into the token; the API ignores caller-supplied tenant headers.
 - Set a unique `INGESTION_TENANT_ID` on each tenant-assigned sensor process in staging/production. Packet and flow messages use the required tenant-scoped v1.2 event schema. Unauthenticated bank-portal ingestion is local/test only.
 - PostgreSQL verdict, alert, decision, audit, training-label, and behavioral-profile storage is tenant-scoped with application filters and row-level security. Existing rows without verified ownership stay unassigned and are hidden from tenant queries.

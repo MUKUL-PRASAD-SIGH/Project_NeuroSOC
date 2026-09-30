@@ -2923,6 +2923,11 @@ def _record_security_audit_event(event: dict[str, Any]) -> bool:
         return False
 
 
+def _require_model_audit(event: dict[str, Any]) -> None:
+    if not _record_security_audit_event(event):
+        raise HTTPException(status_code=503, detail="Model control is temporarily unavailable.")
+
+
 async def _record_http_audit_event(
     request: Request,
     event_type: str,
@@ -3219,15 +3224,6 @@ def _latest_history_snapshot() -> tuple[str, dict[str, Any]] | None:
         return None
     latest = snapshots[0]
     return latest.name, json.loads(latest.read_text(encoding="utf-8-sig"))
-
-
-def _pop_latest_history_snapshot() -> tuple[str, dict[str, Any]] | None:
-    found = _latest_history_snapshot()
-    if found is None:
-        return None
-    name, payload = found
-    (MODEL_HISTORY_DIR / name).unlink(missing_ok=True)
-    return name, payload
 
 
 def _candidate_manifest_path(candidate_id: str) -> Path:
@@ -4044,31 +4040,13 @@ def promote_model_candidate(candidate_id: str, request: Request) -> dict[str, An
     if candidate.get("status") != "pending_approval":
         raise HTTPException(status_code=409, detail=f"Candidate is already {candidate.get('status')}.")
 
-    current_payload = runtime.engine._read_model_version()
-    _write_history_snapshot(current_payload)
-
-    new_payload = dict(current_payload)
-    new_payload["version"] = candidate["proposed_version"]
-    new_payload[candidate["model_key"]] = candidate["artifact_path"]
-    validation_f1 = dict(new_payload.get("validation_f1") or {})
-    validation_f1[candidate["model_key"]] = candidate["validation_f1"]
-    new_payload["validation_f1"] = validation_f1
-    new_payload["timestamp"] = datetime.now(timezone.utc).isoformat()
-    _atomic_write_json(MODEL_VERSION_PATH, new_payload)
-
-    reloaded = runtime.engine.force_activate_manifest(new_payload)
-
     actor_id = _actor_from_request(request)
     actor_roles = list((getattr(request.state, "identity", None) or {}).get("roles", []))
-    candidate["status"] = "promoted"
-    candidate["promoted_at"] = datetime.now(timezone.utc).isoformat()
-    candidate["promoted_by"] = actor_id
-    _save_candidate_manifest(candidate)
-
-    _record_security_audit_event(
+    candidate_before = dict(candidate)
+    _require_model_audit(
         _new_security_audit_event(
             "security.model_promotion",
-            "succeeded",
+            "attempted",
             route="/api/models/candidates/{candidate_id}/promote",
             http_method="POST",
             actor_id=actor_id,
@@ -4077,10 +4055,73 @@ def promote_model_candidate(candidate_id: str, request: Request) -> dict[str, An
             details={
                 "model_key": candidate["model_key"],
                 "new_version": candidate["proposed_version"],
-                "reloaded": reloaded,
             },
         )
     )
+
+    current_payload = runtime.engine._read_model_version()
+    history_filename: str | None = None
+    try:
+        history_filename = _write_history_snapshot(current_payload)
+        new_payload = dict(current_payload)
+        new_payload["version"] = candidate["proposed_version"]
+        new_payload[candidate["model_key"]] = candidate["artifact_path"]
+        validation_f1 = dict(new_payload.get("validation_f1") or {})
+        validation_f1[candidate["model_key"]] = candidate["validation_f1"]
+        new_payload["validation_f1"] = validation_f1
+        new_payload["timestamp"] = datetime.now(timezone.utc).isoformat()
+        _atomic_write_json(MODEL_VERSION_PATH, new_payload)
+
+        reloaded = runtime.engine.force_activate_manifest(new_payload)
+        if not reloaded:
+            raise HTTPException(status_code=422, detail="Candidate model could not be activated.")
+
+        candidate["status"] = "promoted"
+        candidate["promoted_at"] = datetime.now(timezone.utc).isoformat()
+        candidate["promoted_by"] = actor_id
+        _save_candidate_manifest(candidate)
+
+        _require_model_audit(
+            _new_security_audit_event(
+                "security.model_promotion",
+                "succeeded",
+                route="/api/models/candidates/{candidate_id}/promote",
+                http_method="POST",
+                actor_id=actor_id,
+                actor_roles=actor_roles,
+                resource_id=candidate_id,
+                details={
+                    "model_key": candidate["model_key"],
+                    "new_version": candidate["proposed_version"],
+                    "reloaded": reloaded,
+                },
+            )
+        )
+    except Exception as exc:
+        restoration_failed = False
+        try:
+            _atomic_write_json(MODEL_VERSION_PATH, current_payload)
+            if not runtime.engine.force_activate_manifest(current_payload):
+                raise RuntimeError("The previous model manifest could not be reactivated.")
+        except Exception:
+            restoration_failed = True
+            log.exception("Failed to restore the active model after candidate promotion failed.")
+        try:
+            _save_candidate_manifest(candidate_before)
+        except Exception:
+            restoration_failed = True
+            log.exception("Failed to restore the candidate manifest after promotion failed.")
+        if history_filename:
+            try:
+                (MODEL_HISTORY_DIR / history_filename).unlink(missing_ok=True)
+            except Exception:
+                restoration_failed = True
+                log.exception("Failed to discard the incomplete promotion history snapshot.")
+        if restoration_failed:
+            raise HTTPException(status_code=503, detail="Model promotion state needs operator review.") from exc
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(status_code=503, detail="Model promotion was not committed.") from exc
 
     return {
         "candidateId": candidate_id,
@@ -4100,15 +4141,11 @@ def reject_model_candidate(candidate_id: str, request: Request) -> dict[str, Any
 
     actor_id = _actor_from_request(request)
     actor_roles = list((getattr(request.state, "identity", None) or {}).get("roles", []))
-    candidate["status"] = "rejected"
-    candidate["rejected_at"] = datetime.now(timezone.utc).isoformat()
-    candidate["rejected_by"] = actor_id
-    _save_candidate_manifest(candidate)
-
-    _record_security_audit_event(
+    candidate_before = dict(candidate)
+    _require_model_audit(
         _new_security_audit_event(
             "security.model_rejection",
-            "succeeded",
+            "attempted",
             route="/api/models/candidates/{candidate_id}/reject",
             http_method="POST",
             actor_id=actor_id,
@@ -4118,35 +4155,99 @@ def reject_model_candidate(candidate_id: str, request: Request) -> dict[str, Any
         )
     )
 
+    try:
+        candidate["status"] = "rejected"
+        candidate["rejected_at"] = datetime.now(timezone.utc).isoformat()
+        candidate["rejected_by"] = actor_id
+        _save_candidate_manifest(candidate)
+
+        _require_model_audit(
+            _new_security_audit_event(
+                "security.model_rejection",
+                "succeeded",
+                route="/api/models/candidates/{candidate_id}/reject",
+                http_method="POST",
+                actor_id=actor_id,
+                actor_roles=actor_roles,
+                resource_id=candidate_id,
+                details={"model_key": candidate["model_key"]},
+            )
+        )
+    except Exception as exc:
+        try:
+            _save_candidate_manifest(candidate_before)
+        except Exception:
+            log.exception("Failed to restore the candidate manifest after rejection failed.")
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(status_code=503, detail="Candidate rejection was not committed.") from exc
+
     return _format_candidate(candidate)
 
 
 @app.post("/api/v1/models/rollback", response_model=ModelRollbackResponse)
 def rollback_model(request: Request) -> dict[str, Any]:
-    snapshot = _pop_latest_history_snapshot()
+    snapshot = _latest_history_snapshot()
     if snapshot is None:
         raise HTTPException(status_code=404, detail="No previous model version to roll back to.")
-    _snapshot_name, restored_payload = snapshot
-
-    _atomic_write_json(MODEL_VERSION_PATH, restored_payload)
-    reloaded = runtime.engine.force_activate_manifest(restored_payload)
+    snapshot_name, restored_payload = snapshot
+    snapshot_path = MODEL_HISTORY_DIR / snapshot_name
 
     actor_id = _actor_from_request(request)
     actor_roles = list((getattr(request.state, "identity", None) or {}).get("roles", []))
-    _record_security_audit_event(
+    _require_model_audit(
         _new_security_audit_event(
             "security.model_rollback",
-            "succeeded",
+            "attempted",
             route="/api/models/rollback",
             http_method="POST",
             actor_id=actor_id,
             actor_roles=actor_roles,
-            details={
-                "restored_version": str(restored_payload.get("version")),
-                "reloaded": reloaded,
-            },
+            details={"restored_version": str(restored_payload.get("version"))},
         )
     )
+
+    current_payload = runtime.engine._read_model_version()
+    try:
+        _atomic_write_json(MODEL_VERSION_PATH, restored_payload)
+        reloaded = runtime.engine.force_activate_manifest(restored_payload)
+        if not reloaded:
+            raise HTTPException(status_code=422, detail="Previous model could not be activated.")
+        snapshot_path.unlink(missing_ok=True)
+        _require_model_audit(
+            _new_security_audit_event(
+                "security.model_rollback",
+                "succeeded",
+                route="/api/models/rollback",
+                http_method="POST",
+                actor_id=actor_id,
+                actor_roles=actor_roles,
+                details={
+                    "restored_version": str(restored_payload.get("version")),
+                    "reloaded": reloaded,
+                },
+            )
+        )
+    except Exception as exc:
+        restoration_failed = False
+        try:
+            _atomic_write_json(MODEL_VERSION_PATH, current_payload)
+            if not runtime.engine.force_activate_manifest(current_payload):
+                raise RuntimeError("The active model manifest could not be restored.")
+        except Exception:
+            restoration_failed = True
+            log.exception("Failed to restore the active model after rollback failed.")
+        try:
+            if not snapshot_path.exists():
+                _atomic_write_json(snapshot_path, restored_payload)
+        except Exception:
+            restoration_failed = True
+            log.exception("Failed to restore the history snapshot after rollback failed.")
+        if restoration_failed:
+            raise HTTPException(status_code=503, detail="Model rollback state needs operator review.") from exc
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(status_code=503, detail="Model rollback was not committed.") from exc
 
     return {
         "restoredVersion": str(restored_payload.get("version")),
