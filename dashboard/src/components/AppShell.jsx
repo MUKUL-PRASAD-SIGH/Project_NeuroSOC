@@ -1,13 +1,14 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { OIDC_REQUIRED } from "../lib/auth";
-import { DEMO_DATA_ENABLED, MODEL_INTEGRATION_ENABLED } from "../lib/featureFlags";
+import { DEMO_DATA_ENABLED, MODEL_INTEGRATION_ENABLED, UNIVERSAL_ENABLED } from "../lib/featureFlags";
 import { useDashboardStore } from "../store/dashboardStore";
 
 const NAV_ITEMS = [
   { to: "/", label: "Overview", end: true },
   { to: "/intel-feed", label: "Intel Feed" },
   { to: "/response-ops", label: "Response" },
+  ...(UNIVERSAL_ENABLED ? [{ to: "/protection", label: "Protection" }] : []),
 ];
 
 function BrandMark() {

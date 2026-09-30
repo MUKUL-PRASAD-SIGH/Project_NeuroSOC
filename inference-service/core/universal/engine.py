@@ -132,6 +132,7 @@ class UniversalEngine:
                 "entity": dict(entity),
                 "event_action": action,
                 "resource": dict(resource),
+                "value": event.get("value"),
                 "verdict": verdict,
                 "action": RESPONSES[verdict],
                 "enforced": mode == "enforce",
@@ -241,6 +242,7 @@ class UniversalEngine:
             "human": len(participants) - len(flagged),
             "claims": claims,
             "flagged_accounts": sorted(flagged)[:200],
+            "human_accounts": sorted(participants - flagged)[:200],
         }
 
     def override(self, tenant: str, verdict_id: str, decision: str, actor: str | None) -> dict[str, Any] | None:

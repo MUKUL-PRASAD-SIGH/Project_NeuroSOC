@@ -315,6 +315,8 @@ services:
         # Set OIDC_REQUIRED and VITE_OIDC_REQUIRED to "true" together (and start the
         # local-identity profile for Keycloak) to require sign-in for this run.
         VITE_OIDC_REQUIRED: ${VITE_OIDC_REQUIRED:-false}
+        # Shows the SDK Protection page; pair with ENABLE_UNIVERSAL_ENGINE=true on inference.
+        VITE_UNIVERSAL_ENABLED: ${VITE_UNIVERSAL_ENABLED:-false}
     container_name: neuroshield-dashboard
     profiles: ["phase11plus", "demo"]
     networks:
