@@ -18,3 +18,6 @@ matplotlib==3.10.0
 pandas==2.3.3
 shap==0.49.1
 prometheus-client==0.25.0
+
+# Optional: the demo's Nova AI uses Claude when ANTHROPIC_API_KEY is set (lazy import; scripted planner otherwise).
+# pip install anthropic

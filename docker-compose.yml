@@ -181,14 +181,21 @@ services:
       - ./schemas:/schemas:ro
       - ./sdk/presets:/sdk/presets:ro
       - ./sdk/sites.local.json:/sdk/sites.local.json:ro
+      - ./sdk/python:/sdk/python:ro
+      - ./inference-service:/app
     environment:
       APP_ENV: ${APP_ENV:-local}
+      PYTHONPATH: /app:/sdk/python
       # NeuroSOC SDK / universal behavioral engine (off unless set in .env)
       ENABLE_UNIVERSAL_ENGINE: ${ENABLE_UNIVERSAL_ENGINE:-false}
       UNIVERSAL_HASH_SECRET: ${UNIVERSAL_HASH_SECRET:-}
       UNIVERSAL_SITES_FILE: ${UNIVERSAL_SITES_FILE:-}
       UNIVERSAL_SCORER: ${UNIVERSAL_SCORER:-}
       BEHAVIOR_EVENTS_TOPIC: ${BEHAVIOR_EVENTS_TOPIC:-behavior-events}
+      # NovaTrust demo app + Nova AI agent (local only: main.py refuses to start with it in staging/production)
+      NEUROSOC_DEMO_MODE: ${NEUROSOC_DEMO_MODE:-false}
+      NEUROSOC_SELF_URL: ${NEUROSOC_SELF_URL:-}
+      NOVATRUST_DEMO_SECRET_KEY: ${NOVATRUST_DEMO_SECRET_KEY:-}
       KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP:-kafka:9092}
       KAFKA_SECURITY_PROTOCOL: ${KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
       KAFKA_SASL_MECHANISM: ${KAFKA_SASL_MECHANISM:-SCRAM-SHA-512}

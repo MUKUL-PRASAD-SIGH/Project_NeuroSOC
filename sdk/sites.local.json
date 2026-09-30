@@ -34,12 +34,56 @@
     "publishable_key": "pk_local_novatrust_observe",
     "secret_key": "sk_local_novatrust_observe_not_for_production",
     "allowed_origins": [
+      "http://localhost:3000",
+      "http://localhost:5173",
       "http://localhost:3001",
       "http://localhost:5174",
+      "http://127.0.0.1:3000",
+      "http://127.0.0.1:5173",
       "chrome-extension://*"
     ],
     "mode": "observe",
     "preset": "novatrust"
+  },
+  {
+    "site_id": "novatrust-demo",
+    "tenant_id": "local",
+    "name": "NovaTrust (demo)",
+    "publishable_key": "pk_local_novatrust_demo",
+    "secret_key": "sk_local_novatrust_demo_not_for_production",
+    "allowed_origins": [
+      "http://localhost:3000",
+      "http://localhost:5173",
+      "http://localhost:3001",
+      "http://localhost:5174",
+      "http://127.0.0.1:3000",
+      "http://127.0.0.1:5173",
+      "chrome-extension://*"
+    ],
+    "mode": "enforce",
+    "preset": "novatrust",
+    "app_type": "both",
+    "url": "http://localhost:5173/demo",
+    "demo": true,
+    "agents": [
+      {
+        "agent_id": "novatrust-agent",
+        "name": "Nova AI",
+        "tools": [
+          "get_balance",
+          "get_transactions",
+          "get_portfolio",
+          "create_transfer",
+          "cancel_transfer"
+        ],
+        "sensitive_actions": [
+          "token.transfer"
+        ],
+        "authorized_resources": [
+          "treasury"
+        ]
+      }
+    ]
   },
   {
     "site_id": "example-agent",

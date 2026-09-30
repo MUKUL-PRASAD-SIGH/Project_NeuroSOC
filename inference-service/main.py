@@ -251,6 +251,11 @@ HOST = os.getenv("INFERENCE_HOST", "0.0.0.0")
 PORT = int(os.getenv("INFERENCE_PORT", "8000"))
 API_KEY = os.getenv("API_KEY", "")
 APP_ENV = os.getenv("APP_ENV", "local").strip().lower()
+# The NovaTrust demo app's routes (api/routes/demo_agent.py). Demo only: staging/production refuse to start with it on.
+NEUROSOC_DEMO_MODE = _read_bool_env("NEUROSOC_DEMO_MODE", "false")
+if NEUROSOC_DEMO_MODE and APP_ENV in {"staging", "production"}:
+    # At import, before any other production check can fail first: the demo must never run there.
+    raise RuntimeError("NEUROSOC_DEMO_MODE cannot be enabled in staging or production.")
 KAFKA_CLIENT_SECURITY_OPTIONS = kafka_client_security_options(APP_ENV)
 OIDC_ISSUER = os.getenv("OIDC_ISSUER", "").rstrip("/")
 OIDC_AUDIENCE = os.getenv("OIDC_AUDIENCE", "neurosoc-dashboard")
@@ -585,6 +590,7 @@ class LatestAlertsResponse(StrictResponseModel):
 
 
 class VerdictSnapshotResponse(StrictResponseModel):
+    tenant_id: StrictStr | None = None
     session_id: SessionIdentifier | None = None
     user_id: Identifier | None = None
     source_ip: SourceAddress | None = None
@@ -4316,6 +4322,18 @@ if ENABLE_UNIVERSAL_ENGINE:
     if UNIVERSAL_SITES_FILE:
         log.info("Seeded %d SDK site(s) from %s.", universal_sites.seed_from_file(UNIVERSAL_SITES_FILE), UNIVERSAL_SITES_FILE)
     universal_engine = UniversalEngine(_universal_kv, load_scorer())
+    _demo_routers: tuple = ()
+    if NEUROSOC_DEMO_MODE:
+        from api.routes.demo_agent import build_demo_router
+        from core.demo.runtime import DemoRuntime
+
+        _demo_runtime = DemoRuntime(
+            universal_engine, universal_sites,
+            hash_secret=UNIVERSAL_HASH_SECRET or "neurosoc-local-universal-hash-secret",
+            # The demo agent reaches NeuroSOC over HTTP like any customer; this service is that endpoint.
+            self_url=os.getenv("NEUROSOC_SELF_URL", "").strip() or f"http://127.0.0.1:{PORT}")
+        _demo_routers = (build_demo_router(_demo_runtime, tenant_of=_request_tenant_id),)
+        log.warning("NEUROSOC_DEMO_MODE is on: the NovaTrust demo routes are mounted under /api/v1/demo.")
     app.include_router(build_universal_router(universal_engine, universal_sites, UniversalHooks(
         hash_secret=UNIVERSAL_HASH_SECRET or "neurosoc-local-universal-hash-secret",
         tenant_of=_request_tenant_id,
@@ -4326,9 +4344,13 @@ if ENABLE_UNIVERSAL_ENGINE:
         on_shadow=_universal_on_shadow,
         publish=_universal_publish,
         audit=_universal_audit,
-    )))
+    ), extra_routers=_demo_routers))
     app.add_middleware(SdkCorsMiddleware, origin_allowed=universal_sites.origin_allowed_anywhere)
     log.info("Universal behavioral engine enabled (scorer: %s).", universal_engine.scorer.name)
+
+
+if NEUROSOC_DEMO_MODE and not ENABLE_UNIVERSAL_ENGINE:
+    log.warning("NEUROSOC_DEMO_MODE needs ENABLE_UNIVERSAL_ENGINE=true; the demo routes were not mounted.")
 
 
 if __name__ == "__main__":
