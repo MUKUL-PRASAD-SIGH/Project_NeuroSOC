@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import functools
+import http.client as http_client
 import inspect
 import json
 import time
@@ -88,7 +89,9 @@ class NeuroSOC:
                 return json.loads(response.read().decode("utf-8"))
         except urllib_error.HTTPError as exc:
             raise NeuroSOCError(f"NeuroSOC returned HTTP {exc.code} for {path}") from None
-        except (urllib_error.URLError, TimeoutError, ValueError) as exc:
+        except (OSError, http_client.HTTPException, ValueError) as exc:
+            # OSError covers URLError, timeouts and resets; HTTPException covers a server that hangs up mid-reply
+            # (RemoteDisconnected). All of them mean "could not get a verdict", which guard_tool fails closed on.
             raise NeuroSOCError(f"NeuroSOC is unreachable: {exc}") from None
 
     # ── events ────────────────────────────────────────────────────────────
@@ -98,7 +101,9 @@ class NeuroSOC:
               sensitivity: Optional[str] = None, amount: Optional[float] = None, asset: Optional[str] = None,
               destination: Optional[str] = None, context: Optional[dict] = None,
               tool: Optional[str] = None, instruction_source: Optional[str] = None,
-              owner_id: Optional[str] = None) -> dict:
+              owner_id: Optional[str] = None, telemetry: Optional[dict] = None) -> dict:
+        """Build one event. ``telemetry`` (``{"events": [...]}`` or ``{"session_vector": [...]}``) lets a
+        backend that proxies a user's input, for example a chat relay, report how that session behaved."""
         resource: dict[str, Any] = {"id": resource_id, "type": resource_type}
         if sensitivity:
             resource["sensitivity"] = sensitivity
@@ -117,6 +122,8 @@ class NeuroSOC:
             event["context"] = {k: str(v) for k, v in context.items() if v is not None}
         if tool or instruction_source or owner_id:
             event["agent"] = {"tool": tool, "instruction_source": instruction_source, "owner_id": owner_id}
+        if telemetry:
+            event["telemetry"] = telemetry
         return event
 
     def track(self, **kwargs: Any) -> Verdict:
@@ -139,12 +146,18 @@ class NeuroSOC:
                    amount_arg: str = "amount", destination_arg: str = "to",
                    instruction_source_arg: str = "instruction_source", session_id: Optional[str] = None,
                    block_on: tuple = ("pause_agent", "shadow"), fail_open: bool = False,
-                   on_verdict: Optional[Callable[[Verdict], None]] = None) -> Callable:
+                   on_verdict: Optional[Callable[[Verdict], None]] = None,
+                   block_only_when_enforced: bool = False) -> Callable:
         """Decorate an agent tool so every call is scored by NeuroSOC before it executes.
 
         The check runs outside the language model: whatever a prompt says, a blocked call raises
         ActionBlocked and the tool body never runs. ``fail_open=False`` (the default) also blocks
         when NeuroSOC cannot be reached, which is the safe choice for tools that move value.
+
+        By default a blocking verdict stops the tool whatever the site's mode. Set
+        ``block_only_when_enforced=True`` to honor the site's mode instead: a site in ``observe``
+        (Monitor) still gets every decision recorded and on_verdict called, but the call is allowed;
+        only a site in ``enforce`` (Protect) stops it.
         """
         run_session = session_id or f"agent_{agent_id}_{uuid.uuid4().hex[:12]}"
 
@@ -173,7 +186,7 @@ class NeuroSOC:
                                                 reasons=["NeuroSOC could not be reached; failing closed"])) from None
                 if on_verdict is not None:
                     on_verdict(verdict)
-                if verdict.action in block_on:
+                if verdict.action in block_on and (not block_only_when_enforced or verdict.raw.get("enforced")):
                     raise ActionBlocked(verdict)
                 return tool(*args, **kwargs)
 

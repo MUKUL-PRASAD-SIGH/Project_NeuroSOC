@@ -7,7 +7,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 for path in (REPO_ROOT / "inference-service", REPO_ROOT / "sdk" / "python"):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
@@ -92,3 +92,37 @@ def test_backend_session_check(soc):
 def test_publishable_keys_are_refused_on_servers():
     with pytest.raises(ValueError):
         NeuroSOC("http://localhost:8000", "pk_browser_key")
+
+
+def test_connection_dropped_mid_reply_is_a_neurosoc_error_and_fails_closed():
+    """A server that accepts the connection and hangs up raises RemoteDisconnected, which is not a URLError.
+    It must still surface as NeuroSOCError so guard_tool blocks instead of leaking a raw exception."""
+    import socket
+    import threading
+
+    from neurosoc import ActionBlocked, NeuroSOC
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(5)
+
+    def hang_up():
+        for _ in range(2):
+            conn, _ = listener.accept()
+            conn.recv(4096)
+            conn.close()
+
+    threading.Thread(target=hang_up, daemon=True).start()
+    soc = NeuroSOC(f"http://127.0.0.1:{listener.getsockname()[1]}", "sk_test_0123456789", timeout=2.0)
+    ran = []
+
+    @soc.guard_tool(agent_id="a1", action="token.transfer", resource="treasury")
+    def send(to: str, amount: float, instruction_source: str = "owner"):
+        ran.append(to)
+
+    with pytest.raises(NeuroSOCError):
+        soc.guard(entity_id="a1", entity_type="agent", action="token.transfer", resource_id="treasury")
+    with pytest.raises(ActionBlocked):
+        send(to="Alice", amount=1.0)
+    assert ran == []
+    listener.close()

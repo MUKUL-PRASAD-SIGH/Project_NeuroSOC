@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neurosoc"
-version = "0.1.1"
+version = "0.1.2"
 description = "NeuroSOC SDK for backends and AI agents: check session verdicts and guard agent tool calls before they run."
 readme = "README.md"
 license = "Apache-2.0"

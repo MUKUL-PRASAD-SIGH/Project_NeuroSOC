@@ -34,6 +34,8 @@ def transfer(to: str, amount: float, instruction_source: str = "owner"):
 
 Each call is scored before the body runs. A transfer to a never-used destination, far above the agent's usual amount, right after an instruction from outside content (the prompt-injection pattern) raises `ActionBlocked`. The check runs outside the model, so no prompt can argue past it. If NeuroSOC is unreachable, guarded tools fail closed unless you pass `fail_open=True`.
 
+Pass `block_only_when_enforced=True` to follow your application's mode in the dashboard: in **Monitor** the decision is recorded and the call runs, in **Protect** it is blocked.
+
 ## Events and guards
 
 ```python
