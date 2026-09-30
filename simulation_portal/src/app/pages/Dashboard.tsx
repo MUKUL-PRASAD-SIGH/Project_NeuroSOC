@@ -52,23 +52,6 @@ function useCountUp(target: number, durationMs = 1400) {
   return value;
 }
 
-const actionClass =
-  'block w-full rounded-2xl border border-white/10 bg-white/[0.04] p-5 text-left transition-colors hover:bg-white/[0.08]';
-
-function ActionBody({ action }: { action: (typeof ACTIONS)[number] }) {
-  return (
-    <>
-      <span className="flex h-11 w-11 items-center justify-center rounded-xl text-white" style={{ background: GRADIENT }}>
-        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d={action.path} />
-        </svg>
-      </span>
-      <h3 className="mt-4 text-sm font-semibold text-white">{action.title}</h3>
-      <p className="mt-1 text-xs leading-relaxed text-white/50">{action.desc}</p>
-    </>
-  );
-}
-
 export default function Dashboard() {
   const navigate = useNavigate();
   const session = readPortalSession();
