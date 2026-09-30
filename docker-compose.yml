@@ -216,7 +216,7 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       REPORT_EMAIL: ${REPORT_EMAIL:-}
       REPORT_TIME: ${REPORT_TIME:-06:00}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5174}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:3001,http://localhost:5174}
       API_MAX_REQUEST_BODY_BYTES: ${API_MAX_REQUEST_BODY_BYTES:-1048576}
       API_RATE_LIMIT_PER_MINUTE: ${API_RATE_LIMIT_PER_MINUTE:-120}
       TRUSTED_PROXY_IPS: "${TRUSTED_PROXY_IPS:-127.0.0.1,::1,172.30.0.10,172.30.0.11}"
@@ -312,6 +312,7 @@ services:
         VITE_OIDC_REQUIRED: ${VITE_OIDC_REQUIRED:-false}
         # Shows the SDK Protection page; pair with ENABLE_UNIVERSAL_ENGINE=true on inference.
         VITE_UNIVERSAL_ENABLED: ${VITE_UNIVERSAL_ENABLED:-false}
+        VITE_MODEL_INTEGRATION_ENABLED: "true"
     profiles: ["phase11plus", "demo"]
     networks:
       neuroshield-net: {}

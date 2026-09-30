@@ -49,6 +49,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 os.environ.setdefault("BEHAVIOR_PROFILE_DIR", str(REPO_ROOT / "data" / "behavioral_profiles"))
 
 from core.behavioral.signals import extract_session_vector
+from core.novatrust_repository import NovaTrustRepository
 from core.engine import DecisionEngine, ThreatVerdict
 from core.xgboost.model import CLASS_NAMES as TRAINING_CLASS_NAMES
 from core.auth import (
@@ -232,6 +233,7 @@ def _is_safe_production_redis_url(value: str) -> bool:
 
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
+novatrust_repo = NovaTrustRepository(DATABASE_URL)
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 RATE_LIMIT_HASH_SECRET = os.getenv("RATE_LIMIT_HASH_SECRET", "")
 INPUT_TOPIC = os.getenv("INFERENCE_INPUT_TOPIC", "extracted-features")
@@ -312,17 +314,6 @@ BEHAVIOR_DIMENSIONS = [
     "Peer Similarity",
     "Recovery Abuse",
 ]
-
-def _load_simulation_accounts() -> dict[str, dict[str, Any]]:
-    if not ENABLE_SIMULATION_API:
-        return {}
-    from core.simulation_accounts import BANK_ACCOUNTS
-
-    return BANK_ACCOUNTS
-
-
-BANK_ACCOUNTS = _load_simulation_accounts()
-
 
 Identifier = Annotated[StrictStr, Field(min_length=1, max_length=256)]
 SessionIdentifier = Annotated[StrictStr, Field(min_length=1, max_length=128)]
@@ -2037,11 +2028,7 @@ sandbox_gateway = SandboxGateway(SANDBOX_BASE_URL, SANDBOX_SERVICE_TOKEN) if SAN
 
 
 def _account_for_user(user_id: str) -> dict[str, Any] | None:
-    normalized = user_id.strip().lower()
-    for account in BANK_ACCOUNTS.values():
-        if normalized in {account["email"].lower(), account["user_id"].lower()}:
-            return account
-    return None
+    return novatrust_repo.get_account_by_user_id(user_id.strip().lower())
 
 
 def _display_name_for_user(user_id: str) -> str:
@@ -2531,6 +2518,8 @@ class InferenceRuntime:
 
     def start(self) -> None:
         self.repository.bootstrap()
+        if ENABLE_SIMULATION_API:
+            novatrust_repo.bootstrap()
         self._ensure_producer()
         self.engine.start_model_monitor()
         if self._consumer_thread is None or not self._consumer_thread.is_alive():
@@ -3877,7 +3866,7 @@ def get_user_verdict(user_id: str, request: Request) -> dict[str, Any]:
 
 @app.post("/api/v1/bank/login", response_model=BankLoginResponse)
 def bank_login(request: BankLoginRequest, response: Response) -> dict[str, Any]:
-    account = BANK_ACCOUNTS.get(request.email.strip().lower())
+    account = novatrust_repo.get_account(request.email.strip().lower())
     authenticated = bool(account and account["password"] == request.password)
     session = portal_state.record_login_attempt(request.email, request.password, request.session_id, request.source_ip, authenticated)
 
@@ -3904,9 +3893,11 @@ def bank_login(request: BankLoginRequest, response: Response) -> dict[str, Any]:
     if sandbox:
         payload["account"] = _decoy_account(user_id, account, session)
     elif account and authenticated:
+        txs = novatrust_repo.get_transactions(user_id)
         payload["account"] = {
             "balance": account["balance"],
             "accountMasked": account["account_masked"],
+            "transactions": txs
         }
     if not authenticated and not sandbox:
         payload["error"] = "Invalid credentials."
@@ -3938,6 +3929,15 @@ def bank_transfer(request: BankTransferRequest, response: Response) -> dict[str,
     elif verdict.verdict != "LEGITIMATE" or request.amount >= 10000:
         status = "suspicious"
         message = "Transfer pending manual review."
+    else:
+        novatrust_repo.record_transfer(request.user_id, request.amount, request.destination, request.memo)
+        account = novatrust_repo.get_account_by_user_id(request.user_id)
+        if account:
+            account_payload = {
+                "balance": account["balance"],
+                "accountMasked": account["account_masked"],
+                "transactions": novatrust_repo.get_transactions(request.user_id)
+            }
 
     return {
         "status": status,

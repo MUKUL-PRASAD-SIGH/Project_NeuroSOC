@@ -1,15 +1,31 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "neurosoc"
-version = "0.1.0"
+version = "0.1.1"
 description = "NeuroSOC SDK for backends and AI agents: check session verdicts and guard agent tool calls before they run."
 readme = "README.md"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "NeuroSOC Team" }]
 requires-python = ">=3.9"
 dependencies = []
+keywords = ["security", "bot-detection", "fraud", "ai-agents", "behavioral-analytics"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Security",
+]
+
+[project.urls]
+Homepage = "https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC"
+Documentation = "https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC/tree/main/sdk"
+Issues = "https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC/issues"
 
 [tool.setuptools]
 packages = ["neurosoc"]
