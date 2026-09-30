@@ -16,7 +16,6 @@ from urllib.parse import parse_qs, urlsplit
 import numpy as np
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
 from xgboost import XGBClassifier
 
 try:
@@ -27,6 +26,7 @@ except ImportError:  # pragma: no cover - depends on local environment
     RealDictCursor = None
 
 from common import (
+    ClassOrderEncoder,
     CLASS_NAMES,
     DATASET_TRAIN_PATH,
     MODEL_VERSION_PATH,
@@ -166,7 +166,7 @@ def evaluate_xgboost_on_holdout(
 ) -> float:
     if wrapper.model is None:
         raise RuntimeError("Cannot evaluate an XGBoost wrapper with no loaded model.")
-    label_encoder = LabelEncoder()
+    label_encoder = ClassOrderEncoder()
     label_encoder.fit(CLASS_NAMES)
     predictions = wrapper.model.predict(np.asarray(holdout_features, dtype=np.float32))
     true_encoded = label_encoder.transform(holdout_labels)
@@ -393,7 +393,7 @@ class RetrainingService:
     ) -> tuple[XGBoostClassifier, float, float, dict[str, Any]]:
         x_train, x_val, y_train, y_val = self._split_dataset(features, labels)
 
-        label_encoder = LabelEncoder()
+        label_encoder = ClassOrderEncoder()
         label_encoder.fit(CLASS_NAMES)
         y_train_encoded = label_encoder.transform(y_train)
         y_val_encoded = label_encoder.transform(y_val)
