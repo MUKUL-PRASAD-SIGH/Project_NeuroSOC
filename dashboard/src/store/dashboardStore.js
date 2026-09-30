@@ -1,11 +1,16 @@
 import { create } from "zustand";
 import {
   getAlerts,
+  getModelCandidates,
   getModelVersion,
   getStats,
   MAX_ALERTS,
+  promoteModelCandidate,
+  rejectModelCandidate,
+  rollbackModel,
   subscribeToAlerts,
 } from "../services/dashboardApi";
+import { loadCurrentUser, rolesFromUser, signIn as oidcSignIn, signOut as oidcSignOut } from "../lib/auth";
 
 const initialStats = {
   totalTransactions: 0,
@@ -64,6 +69,12 @@ export const useDashboardStore = create((set, get) => ({
     error: null,
     lastUpdated: null,
   },
+  modelCandidates: {
+    items: [],
+    loading: false,
+    error: null,
+    lastUpdated: null,
+  },
   threatMap: {
     items: [],
     lastUpdated: null,
@@ -73,6 +84,33 @@ export const useDashboardStore = create((set, get) => ({
     open: false,
   },
   alertStreamCleanup: null,
+  auth: {
+    user: null,
+    roles: [],
+    isAuthenticated: false,
+    checked: false,
+  },
+
+  refreshAuth: async () => {
+    const user = await loadCurrentUser();
+    set({
+      auth: {
+        user,
+        roles: rolesFromUser(user),
+        isAuthenticated: Boolean(user && !user.expired),
+        checked: true,
+      },
+    });
+    return user;
+  },
+
+  signIn: async () => {
+    await oidcSignIn();
+  },
+
+  signOut: async () => {
+    await oidcSignOut();
+  },
 
   fetchStats: async () => {
     set((state) => ({
@@ -140,6 +178,33 @@ export const useDashboardStore = create((set, get) => ({
         },
       }));
     }
+  },
+
+  fetchModelCandidates: async () => {
+    set((state) => ({ modelCandidates: { ...state.modelCandidates, loading: true, error: null } }));
+    try {
+      const items = await getModelCandidates();
+      set((state) => ({
+        modelCandidates: { ...state.modelCandidates, items, loading: false, error: null, lastUpdated: Date.now() },
+      }));
+    } catch (error) {
+      set((state) => ({ modelCandidates: { ...state.modelCandidates, loading: false, error: error.message } }));
+    }
+  },
+
+  promoteCandidate: async (candidateId) => {
+    await promoteModelCandidate(candidateId);
+    await Promise.all([get().fetchModelCandidates(), get().fetchModelStatus()]);
+  },
+
+  rejectCandidate: async (candidateId) => {
+    await rejectModelCandidate(candidateId);
+    await get().fetchModelCandidates();
+  },
+
+  rollbackActiveModel: async () => {
+    await rollbackModel();
+    await Promise.all([get().fetchModelCandidates(), get().fetchModelStatus()]);
   },
 
   hydrateAlerts: async () => {
@@ -231,6 +296,21 @@ export const useDashboardStore = create((set, get) => ({
       cleanup();
     }
     set({ alertStreamCleanup: null });
+  },
+
+  applyAlertDecision: (sessionId, patch) => {
+    set((state) => ({
+      alerts: {
+        ...state.alerts,
+        items: state.alerts.items.map((item) =>
+          item.id === sessionId ? { ...item, ...patch } : item
+        ),
+      },
+      modal:
+        state.modal.selectedAlert?.id === sessionId
+          ? { ...state.modal, selectedAlert: { ...state.modal.selectedAlert, ...patch } }
+          : state.modal,
+    }));
   },
 
   openUserModal: (alert) => {

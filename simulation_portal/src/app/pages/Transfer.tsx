@@ -49,6 +49,25 @@ export default function Transfer() {
     return sqlPatterns.some(pattern => pattern.test(text));
   };
 
+  const confirmTransfer = (message?: string) => {
+    writePortalSession({
+      recentTransfers: [
+        {
+          id: `tx-${Date.now()}`,
+          date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+          description: `Transfer to ${recipientName || 'external account'}`,
+          amount: Number(amount) || 0,
+        },
+        ...(session.recentTransfers || []),
+      ],
+    });
+    setFeedback({
+      tone: 'success',
+      message: message || `Transfer of $${amount} to ${recipientName} has been initiated.`,
+    });
+    window.setTimeout(() => navigate('/dashboard'), 2200);
+  };
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -65,7 +84,8 @@ export default function Transfer() {
           confidence: attack.confidence,
           sandbox: attack.sandbox || null,
         });
-        navigate('/security-alert');
+        if (attack.sandbox?.active) confirmTransfer();
+        else navigate('/security-alert');
         return;
       }
 
@@ -77,7 +97,8 @@ export default function Transfer() {
           confidence: honeypot.confidence,
           sandbox: honeypot.sandbox || null,
         });
-        navigate('/security-alert');
+        if (honeypot.sandbox?.active) confirmTransfer();
+        else navigate('/security-alert');
         return;
       }
 
@@ -97,7 +118,13 @@ export default function Transfer() {
         sandbox: result.sandbox || null,
       });
 
-      if (result.sandbox?.active || result.verdict === 'HACKER') {
+      if (result.sandbox?.active) {
+        // Diverted sessions get the same confirmation a customer would see.
+        confirmTransfer();
+        return;
+      }
+
+      if (result.verdict === 'HACKER') {
         navigate('/security-alert');
         return;
       }
@@ -110,11 +137,7 @@ export default function Transfer() {
         return;
       }
 
-      setFeedback({
-        tone: 'success',
-        message: result.message || `Transfer of $${amount} to ${recipientName} has been initiated.`,
-      });
-      window.setTimeout(() => navigate('/dashboard'), 1800);
+      confirmTransfer();
     } catch (error) {
       console.error('Transfer error:', error);
       setFeedback({

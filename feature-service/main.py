@@ -31,6 +31,7 @@ import json
 import logging
 import math
 import os
+import re
 import statistics
 import threading
 import time
@@ -40,7 +41,9 @@ from collections import OrderedDict
 from typing import Any
 
 from kafka import KafkaConsumer, KafkaProducer
+from prometheus_client import Counter, start_http_server
 from kafka.errors import NoBrokersAvailable
+from kafka_security import kafka_client_security_options
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,6 +55,12 @@ log = logging.getLogger(__name__)
 KAFKA_BOOTSTRAP       = os.getenv("KAFKA_BOOTSTRAP",        "kafka:9092")
 FLOW_TIMEOUT_SECONDS  = float(os.getenv("FLOW_TIMEOUT_SECONDS", "3.0"))
 MAX_FLOWS             = int(os.getenv("MAX_FLOWS",          "100000"))
+METRICS_PORT          = int(os.getenv("METRICS_PORT", "9101"))
+APP_ENV               = os.getenv("APP_ENV", "local").strip().lower()
+KAFKA_CLIENT_SECURITY_OPTIONS = kafka_client_security_options(APP_ENV)
+
+PACKETS_PROCESSED = Counter("neurosoc_feature_packets_processed_total", "Raw packets consumed by the feature engine")
+FLOWS_PUBLISHED = Counter("neurosoc_feature_flows_published_total", "Flow feature records published downstream")
 IN_TOPIC              = "raw-packets"
 OUT_TOPIC             = "extracted-features"
 LOG_EVERY             = 100    # log every N flows
@@ -187,7 +196,7 @@ class FlowRecord:
     """Accumulates raw packet data for one bidirectional network flow."""
 
     __slots__ = (
-        "key", "source_id", "correlation_id", "start_ts", "last_ts",
+        "key", "source_id", "correlation_id", "tenant_id", "start_ts", "last_ts",
         "fwd_pkts", "bwd_pkts",
         "fwd_lens", "bwd_lens",
         "all_iats", "fwd_iats", "bwd_iats",
@@ -201,6 +210,7 @@ class FlowRecord:
         self.key        = key
         self.source_id = key[5]
         self.correlation_id = key[6]
+        self.tenant_id = key[7]
         self.start_ts   = ts
         self.last_ts    = ts
         self._prev_ts   = ts
@@ -498,6 +508,7 @@ def _build_consumer() -> KafkaConsumer:
             c = KafkaConsumer(
                 IN_TOPIC,
                 bootstrap_servers=KAFKA_BOOTSTRAP,
+                **KAFKA_CLIENT_SECURITY_OPTIONS,
                 group_id="feature-engine",
                 auto_offset_reset="latest",
                 enable_auto_commit=True,
@@ -516,6 +527,7 @@ def _build_producer() -> KafkaProducer:
         try:
             p = KafkaProducer(
                 bootstrap_servers=KAFKA_BOOTSTRAP,
+                **KAFKA_CLIENT_SECURITY_OPTIONS,
                 value_serializer=lambda v: json.dumps(v).encode("utf-8"),
                 acks="all",
                 retries=5,
@@ -550,15 +562,20 @@ def _get_or_create_flow(key: tuple, ts: float) -> FlowRecord:
 
 
 def _flow_key(pkt: dict) -> tuple:
-    """Canonical flow key partitioned by source and available correlation ID."""
+    """Canonical flow key partitioned by tenant, source, and correlation ID."""
     src = pkt.get("src_ip", ""), int(pkt.get("src_port", 0))
     dst = pkt.get("dst_ip", ""), int(pkt.get("dst_port", 0))
     proto = pkt.get("protocol", "OTHER")
     source_id = pkt.get("source_id") or f"legacy:{pkt.get('source', 'unknown')}"
     correlation_id = pkt.get("correlation_id") or pkt.get("session_id")
+    tenant_id = pkt.get("tenant_id")
+    if not isinstance(tenant_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", tenant_id):
+        raise ValueError("Feature event is missing a valid trusted tenant_id.")
+    if APP_ENV in {"staging", "production"} and tenant_id == "local":
+        raise ValueError("The local tenant cannot enter a shared production feature flow.")
     if src <= dst:
-        return (src[0], dst[0], src[1], dst[1], proto, source_id, correlation_id)
-    return (dst[0], src[0], dst[1], src[1], proto, source_id, correlation_id)
+        return (src[0], dst[0], src[1], dst[1], proto, source_id, correlation_id, tenant_id)
+    return (dst[0], src[0], dst[1], src[1], proto, source_id, correlation_id, tenant_id)
 
 
 def _direction(pkt: dict, key: tuple) -> str:
@@ -588,8 +605,9 @@ def _janitor(producer: KafkaProducer) -> None:
                 feats = _scale_features(raw_feats)
                 flow_id = str(uuid.uuid4())
                 msg = {
-                    "schema_version": "1.1",
+                    "schema_version": "1.2",
                     "event_type": "network.flow",
+                    "tenant_id": flow.tenant_id,
                     "flow_id":   flow_id,
                     "src_ip":    key[0],
                     "dst_ip":    key[1],
@@ -605,6 +623,7 @@ def _janitor(producer: KafkaProducer) -> None:
                     "idempotency_key": f"network.flow:{flow_id}",
                 }
                 producer.send(OUT_TOPIC, value=msg)
+                FLOWS_PUBLISHED.inc()
                 flow_count += 1
                 if flow_count % LOG_EVERY == 0:
                     log.info("📊 Extracted %d flows → '%s'.", flow_count, OUT_TOPIC)
@@ -616,6 +635,9 @@ def _janitor(producer: KafkaProducer) -> None:
 def main() -> None:
     log.info("Feature Engine starting. Flow timeout: %.1fs  Max flows: %d",
              FLOW_TIMEOUT_SECONDS, MAX_FLOWS)
+
+    start_http_server(METRICS_PORT)
+    log.info("📈 Metrics exposed on :%d/metrics", METRICS_PORT)
 
     consumer = _build_consumer()
     producer = _build_producer()
@@ -630,6 +652,7 @@ def main() -> None:
     for msg in consumer:
         try:
             pkt = msg.value
+            PACKETS_PROCESSED.inc()
             ts  = float(pkt.get("timestamp", time.time()))
             key = _flow_key(pkt)
             flow = _get_or_create_flow(key, ts)

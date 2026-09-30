@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { DEMO_DATA_ENABLED } from "../lib/featureFlags";
 import { useDashboardStore } from "../store/dashboardStore";
 
 const verdictTone = {
@@ -33,11 +34,11 @@ const pct = (value) => Math.round((Number(value) || 0) * 100);
 
 const verdictSummary = {
   HACKER: (a) =>
-    `Session from ${a.sourceIp}${a.locationLabel ? ` (${a.locationLabel})` : ""} classified as an attacker. Diverted to sandbox.`,
+    `Session from ${a.sourceIp}${a.locationLabel ? ` (${a.locationLabel})` : ""} was flagged as a likely threat. Review the evidence and response status.`,
   FORGETFUL_USER: (a) =>
-    `${a.userName || a.sourceIp} showed unusual behaviour without matching an attack pattern. Likely a locked-out user.`,
-  LEGITIMATE: (a) => `${a.userName || a.sourceIp} passed all checks. No action needed.`,
-  INCONCLUSIVE: (a) => `Insufficient signal for ${a.sourceIp}. Session remains under observation.`,
+    `${a.userName || a.sourceIp} was flagged for analyst review after unusual sign-in behaviour.`,
+  LEGITIMATE: (a) => `${a.userName || a.sourceIp} was classified as normal. No response is currently indicated.`,
+  INCONCLUSIVE: (a) => `There is not enough signal to classify ${a.sourceIp} confidently.`,
 };
 
 const ALERT_CAP = 50;
@@ -71,6 +72,11 @@ function AlertCard({ alert, onOpen }) {
             {verdictLabel[verdict] || verdict.replace(/_/g, " ")}
           </span>
           <span className="truncate text-sm font-medium text-soc-text">{alert.userName || alert.sourceIp}</span>
+          {alert.status && alert.status !== "new" ? (
+            <span className="shrink-0 rounded border border-soc-border/70 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.1em] text-soc-muted">
+              {alert.status}
+            </span>
+          ) : null}
         </div>
         <span className="soc-tabular shrink-0 font-mono text-[11px] text-soc-muted">{formatAlertTime(alert.timestamp)}</span>
       </div>
@@ -134,8 +140,8 @@ export default function AlertFeed({ maxItems = null, showHeader = true, items: a
             </p>
           </div>
           <span className="inline-flex items-center gap-1.5 text-xs capitalize text-soc-muted">
-            <span className={status === "connected" ? "soc-live-dot" : "inline-block h-2 w-2 rounded-full bg-soc-amber"} />
-            {loading ? "Loading" : status || "Idle"}
+            <span className={status === "connected" && !DEMO_DATA_ENABLED ? "soc-live-dot" : "inline-block h-2 w-2 rounded-full bg-soc-amber"} />
+            {DEMO_DATA_ENABLED ? "Demo stream" : loading ? "Loading" : status || "Idle"}
           </span>
         </div>
       )}

@@ -2,3 +2,8 @@ node_modules
 dist
 npm-debug.log*
 .vite
+# Never bake local dev overrides (API keys, mock flags) into a build image; the Docker build
+# uses explicit ARG/ENV values from docker-compose.yml instead.
+.env
+.env.local
+.env.*.local

@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 # Install libpcap for Scapy
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpcap-dev gcc \
+    ca-certificates libpcap-dev gcc \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

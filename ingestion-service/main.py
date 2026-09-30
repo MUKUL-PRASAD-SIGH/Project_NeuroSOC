@@ -15,9 +15,10 @@ CHECKPOINT:
     --topic raw-packets --bootstrap-server kafka:9092 --max-messages 5
   → Should see JSON within seconds even with NO pcap files present.
 
-Three concurrent ingestion modes publish to Kafka topic 'raw-packets':
+Concurrent ingestion modes publish to Kafka topic 'raw-packets':
   - PCAP mode      : reads .pcap files from DATA_DIR using Scapy (streaming)
   - NetFlow mode   : UDP listener on port 2055 for JSON NetFlow records
+  - Syslog mode    : UDP listener (RFC 3164/5424) for SSH auth-failure lines
   - Bank Portal    : FastAPI POST /ingest for browser behavioral events
   - Synthetic mode : auto-generated benign traffic when no PCAP files exist
 """
@@ -31,6 +32,7 @@ import logging
 import math
 import os
 import random
+import re
 import socket
 import threading
 import time
@@ -39,10 +41,13 @@ from typing import Any
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.responses import Response
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, generate_latest
 from fastapi.middleware.cors import CORSMiddleware
 from kafka import KafkaProducer
 from kafka.errors import NoBrokersAvailable
 from pydantic import BaseModel, Field
+from kafka_security import kafka_client_security_options
 
 # ─── logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -56,11 +61,35 @@ KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
 INGESTION_MODE  = os.getenv("INGESTION_MODE", "all").lower()
 DATA_DIR        = os.getenv("DATA_DIR", "/data/pcap")
 INGESTION_SOURCE_ID = os.getenv("INGESTION_SOURCE_ID", "ingestion-service").strip()
+APP_ENV = os.getenv("APP_ENV", "local").strip().lower()
+INGESTION_TENANT_ID = os.getenv("INGESTION_TENANT_ID", "local").strip()
+KAFKA_CLIENT_SECURITY_OPTIONS = kafka_client_security_options(APP_ENV)
 TOPIC           = "raw-packets"
 LOG_EVERY       = 1000
+SYSLOG_PORT     = int(os.getenv("SYSLOG_PORT", "5140"))
+
+# Matches the SSH auth-failure line real sshd writes to syslog/auth.log, RFC 3164 or 5424
+# framing either way, e.g.:
+#   <34>Oct 1 22:14:15 host sshd[1234]: Failed password for invalid user admin \
+#     from 203.0.113.7 port 51234 ssh2
+SSH_AUTH_FAILURE_PATTERN = re.compile(
+    r"Failed password for (?:invalid user )?(?P<user>\S+) from (?P<ip>[0-9a-fA-F:.]+) port (?P<port>\d+)"
+)
 
 if not INGESTION_SOURCE_ID or len(INGESTION_SOURCE_ID) > 116:
     raise ValueError("INGESTION_SOURCE_ID must contain 1 to 116 characters.")
+if APP_ENV not in {"local", "test", "staging", "production"}:
+    raise ValueError("APP_ENV must be local, test, staging, or production.")
+if INGESTION_MODE not in {"pcap", "netflow", "syslog", "bank_portal", "all"}:
+    raise ValueError("INGESTION_MODE must be pcap, netflow, syslog, bank_portal, or all.")
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", INGESTION_TENANT_ID):
+    raise ValueError("INGESTION_TENANT_ID must be a valid tenant identifier.")
+if APP_ENV in {"staging", "production"} and "INGESTION_TENANT_ID" not in os.environ:
+    raise RuntimeError("Staging and production require a trusted INGESTION_TENANT_ID per sensor instance.")
+if APP_ENV in {"staging", "production"} and INGESTION_TENANT_ID == "local":
+    raise RuntimeError("The local tenant cannot be used in staging or production.")
+if APP_ENV in {"staging", "production"} and INGESTION_MODE in {"bank_portal", "all"}:
+    raise RuntimeError("Unauthenticated bank-portal ingestion is local/test only; use tenant-assigned sensor ingress.")
 
 # Ensure DATA_DIR exists — FIX: path-not-found crash on first run
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -76,6 +105,7 @@ def build_producer() -> KafkaProducer:
         try:
             producer = KafkaProducer(
                 bootstrap_servers=KAFKA_BOOTSTRAP,
+                **KAFKA_CLIENT_SECURITY_OPTIONS,
                 value_serializer=lambda v: json.dumps(v).encode("utf-8"),
                 acks="all",
                 retries=5,
@@ -102,9 +132,12 @@ def build_producer() -> KafkaProducer:
 _published_count = 0
 _count_lock = threading.Lock()
 
+EVENTS_PUBLISHED = Counter("neurosoc_ingestion_events_published_total", "Events published to Kafka", ["mode"])
+
 
 def publish(producer: KafkaProducer, record: dict[str, Any]) -> None:
     producer.send(TOPIC, value=record)
+    EVENTS_PUBLISHED.labels(mode=INGESTION_MODE).inc()
     with _count_lock:
         global _published_count
         _published_count += 1
@@ -120,8 +153,9 @@ def _packet_identity(
 ) -> dict[str, Any]:
     """Attach stable source and retry identity metadata to one packet event."""
     return {
-        "schema_version": "1.1",
+        "schema_version": "1.2",
         "event_type": "network.packet",
+        "tenant_id": INGESTION_TENANT_ID,
         "source_id": f"{INGESTION_SOURCE_ID}:{source}",
         "correlation_id": correlation_id,
         "idempotency_key": idempotency_key or f"network.packet:{packet_id}",
@@ -310,6 +344,47 @@ def run_netflow_mode(producer: KafkaProducer) -> None:
             log.error("NetFlow listener error: %s", exc)
 
 
+def run_syslog_mode(producer: KafkaProducer) -> None:
+    """Listen on UDP for real syslog traffic and extract SSH auth-failure events.
+
+    Point an rsyslog/syslog-ng forwarder (or `logger -n <host> -P 5140 -d`) at this port.
+    Non-SSH-failure lines are accepted and discarded silently -- this is a targeted log
+    source, not a general syslog collector.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("0.0.0.0", SYSLOG_PORT))
+    log.info("📡 Syslog UDP listener on 0.0.0.0:%d (SSH auth-failure events)", SYSLOG_PORT)
+
+    while True:
+        try:
+            data, addr = sock.recvfrom(65535)
+            line = data.decode("utf-8", errors="replace")
+            match = SSH_AUTH_FAILURE_PATTERN.search(line)
+            if match is None:
+                continue
+            packet_id = str(uuid.uuid4())
+            record = {
+                **_packet_identity(packet_id, "syslog"),
+                "packet_id": packet_id,
+                "timestamp": time.time(),
+                "src_ip":   match.group("ip")[:64],
+                "dst_ip":   addr[0][:64],
+                "src_port": _bounded_int(match.group("port"), "src_port", 0, 65535),
+                "dst_port": 22,
+                "protocol": "TCP",
+                "length":   len(data),
+                "flags":    {},
+                "ttl":      64,
+                "source":   "syslog",
+                "user_id":  match.group("user")[:128],
+                "extra":    {"login_attempts": 1, "auth_result": "failed"},
+            }
+            publish(producer, record)
+        except Exception as exc:
+            log.error("Syslog listener error: %s", exc)
+
+
 # ─── BANK PORTAL MODE — FastAPI ───────────────────────────────────────────────
 app = FastAPI(title="NeuroShield Ingestion API", version="1.1.0")
 app.add_middleware(
@@ -388,6 +463,11 @@ async def health():
     }
 
 
+@app.get("/metrics")
+async def metrics() -> Response:
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 @app.get("/stats")
 async def stats():
     return {
@@ -412,6 +492,11 @@ def main() -> None:
 
     if INGESTION_MODE in ("netflow", "all"):
         t = threading.Thread(target=run_netflow_mode, args=(producer,), daemon=True, name="netflow")
+        t.start()
+        threads.append(t)
+
+    if INGESTION_MODE in ("syslog", "all"):
+        t = threading.Thread(target=run_syslog_mode, args=(producer,), daemon=True, name="syslog")
         t.start()
         threads.append(t)
 

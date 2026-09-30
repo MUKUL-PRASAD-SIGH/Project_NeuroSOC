@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Protocol, Sequence
+from urllib.parse import parse_qs, urlsplit
 
 try:
     import psycopg2
@@ -21,6 +22,7 @@ except ImportError:  # pragma: no cover - exercised in environments without the 
         return value
 
 from kafka import KafkaProducer
+from kafka_security import kafka_client_security_options
 
 
 logging.basicConfig(
@@ -31,10 +33,25 @@ log = logging.getLogger(__name__)
 
 
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
+APP_ENV = os.getenv("APP_ENV", "local").strip().lower()
+KAFKA_CLIENT_SECURITY_OPTIONS = kafka_client_security_options(APP_ENV)
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "30"))
 FEEDBACK_TOPIC = os.getenv("FEEDBACK_TOPIC", "feedback")
 FEATURE_COLUMNS_PATH = os.getenv("FEATURE_COLUMNS_PATH", "")
+
+
+def _has_verified_postgres_tls(value: str) -> bool:
+    try:
+        query = parse_qs(urlsplit(value).query)
+    except ValueError:
+        return False
+    sslmode = (query.get("sslmode") or [os.getenv("PGSSLMODE", "")])[-1].strip().lower()
+    ca_path_value = (query.get("sslrootcert") or [os.getenv("PGSSLROOTCERT", "")])[-1].strip()
+    if sslmode != "verify-full" or not ca_path_value:
+        return False
+    ca_path = Path(ca_path_value).expanduser()
+    return ca_path.is_file() and os.access(ca_path, os.R_OK)
 
 SQLI_PATTERN = re.compile(
     r"(union\s+select|select\s+.+\s+from|drop\s+table|insert\s+into|delete\s+from|or\s+1\s*=\s*1|--|/\*)",
@@ -181,7 +198,7 @@ def count_login_attempts(actions: Sequence[dict[str, Any]]) -> tuple[int, int]:
 def detect_label(actions: Sequence[dict[str, Any]]) -> SessionLabel:
     if not actions:
         return SessionLabel(
-            label="HACKER",
+            label="OTHER",
             confidence=0.55,
             attack_type="UNKNOWN",
             reason="Empty sandbox session still indicates suspicious diversion.",
@@ -201,7 +218,7 @@ def detect_label(actions: Sequence[dict[str, Any]]) -> SessionLabel:
                 False,
             ):
                 return SessionLabel(
-                    "HACKER",
+                    "BOT",
                     0.91,
                     "HONEYPOT_ACCESS",
                     "A hidden honeypot field was populated during the sandbox session.",
@@ -209,7 +226,7 @@ def detect_label(actions: Sequence[dict[str, Any]]) -> SessionLabel:
             flattened_body = " ".join(iter_texts(body)).lower()
             if any(token_key in flattened_body for token_key in CANARY_KEYS):
                 return SessionLabel(
-                    "HACKER",
+                    "WEB_ATTACK",
                     0.9,
                     "CANARY_TOKEN",
                     "A canary token indicator appeared in the sandbox request payload.",
@@ -245,9 +262,9 @@ def detect_label(actions: Sequence[dict[str, Any]]) -> SessionLabel:
     for action in actions:
         path = str(action.get("path") or "").lower()
         if any(path.startswith(pattern) for pattern in HONEYPOT_PATH_PATTERNS):
-            return SessionLabel("HACKER", 0.90, "HONEYPOT_ACCESS", f"Honeypot endpoint accessed: {path}")
+            return SessionLabel("RECONNAISSANCE", 0.90, "HONEYPOT_ACCESS", f"Honeypot endpoint accessed: {path}")
 
-    return SessionLabel("HACKER", 0.62, "UNKNOWN", "Session was sandboxed and remained suspicious after review.")
+    return SessionLabel("OTHER", 0.62, "UNKNOWN", "Session was sandboxed and remained suspicious after review.")
 
 
 class FeedbackRepository:
@@ -258,6 +275,8 @@ class FeedbackRepository:
         self.feature_names = list(feature_names)
 
     def connect(self):
+        if APP_ENV in {"staging", "production"} and not _has_verified_postgres_tls(self.database_url):
+            raise RuntimeError("Shared deployments require PostgreSQL sslmode=verify-full and a readable server CA certificate.")
         if psycopg2 is None or RealDictCursor is None:
             raise RuntimeError(
                 "psycopg2 is required to connect to PostgreSQL. Install feedback-service requirements first."
@@ -619,6 +638,7 @@ class FeedbackService:
         if self._producer is None:
             self._producer = KafkaProducer(
                 bootstrap_servers=self.kafka_bootstrap,
+                **KAFKA_CLIENT_SECURITY_OPTIONS,
                 value_serializer=lambda payload: json.dumps(payload).encode("utf-8"),
                 acks="all",
                 retries=3,
@@ -688,6 +708,8 @@ class FeedbackService:
 
 
 def main() -> None:
+    if os.getenv("APP_ENV", "local").strip().lower() in {"staging", "production"}:
+        raise RuntimeError("Sandbox feedback is disabled in shared deployments until tenant attribution is implemented.")
     service = FeedbackService()
     try:
         service.run_forever()

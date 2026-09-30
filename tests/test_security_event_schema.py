@@ -10,6 +10,7 @@ from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "security-event-v1.schema.json"
 SCHEMA_V1_1_PATH = Path(__file__).resolve().parents[1] / "schemas" / "security-event-v1.1.schema.json"
+SCHEMA_V1_2_PATH = Path(__file__).resolve().parents[1] / "schemas" / "security-event-v1.2.schema.json"
 
 
 @pytest.fixture
@@ -22,6 +23,13 @@ def event_validator():
 @pytest.fixture
 def event_v1_1_validator():
     schema = json.loads(SCHEMA_V1_1_PATH.read_text(encoding="utf-8"))
+    Draft202012Validator.check_schema(schema)
+    return Draft202012Validator(schema, format_checker=FormatChecker())
+
+
+@pytest.fixture
+def event_v1_2_validator():
+    schema = json.loads(SCHEMA_V1_2_PATH.read_text(encoding="utf-8"))
     Draft202012Validator.check_schema(schema)
     return Draft202012Validator(schema, format_checker=FormatChecker())
 
@@ -167,8 +175,39 @@ def test_v1_1_schema_requires_identifiers_and_defers_tenant_id(event_v1_1_valida
     packet.pop("idempotency_key")
     with pytest.raises(ValidationError):
         event_v1_1_validator.validate(packet)
-
     packet["idempotency_key"] = f"network.packet:{packet_id}"
     packet["tenant_id"] = "future-field"
     with pytest.raises(ValidationError):
         event_v1_1_validator.validate(packet)
+
+
+def test_v1_2_events_require_a_valid_tenant_id(event_v1_2_validator):
+    packet_id = str(uuid4())
+    packet = {
+        "schema_version": "1.2",
+        "event_type": "network.packet",
+        "tenant_id": "acme-prod",
+        "packet_id": packet_id,
+        "timestamp": 1_800_000_000.0,
+        "src_ip": "192.0.2.10",
+        "dst_ip": "198.51.100.4",
+        "src_port": 49152,
+        "dst_port": 443,
+        "protocol": "TCP",
+        "length": 512,
+        "flags": {},
+        "ttl": 64,
+        "source": "pcap",
+        "source_id": "sensor-1:pcap",
+        "correlation_id": None,
+        "idempotency_key": f"network.packet:{packet_id}",
+    }
+    event_v1_2_validator.validate(packet)
+
+    packet.pop("tenant_id")
+    with pytest.raises(ValidationError):
+        event_v1_2_validator.validate(packet)
+
+    packet["tenant_id"] = "other tenant"
+    with pytest.raises(ValidationError):
+        event_v1_2_validator.validate(packet)

@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 import jwt
 from jwt import PyJWKClient
+import re
 
 
 class OIDCValidationError(ValueError):
@@ -15,10 +16,11 @@ class AuthorizationError(PermissionError):
     """Raised when an authenticated identity lacks a required role."""
 
 
-KNOWN_ROLES = frozenset({"analyst", "operator", "admin", "auditor"})
+KNOWN_ROLES = frozenset({"analyst", "operator", "admin", "auditor", "platform-admin"})
 READ_ROLES = KNOWN_ROLES
 RESPONSE_ROLES = frozenset({"operator", "admin"})
-MODEL_ADMIN_ROLES = frozenset({"admin"})
+MODEL_ADMIN_ROLES = frozenset({"platform-admin"})
+TENANT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 
 WRITE_ROUTES = frozenset(
     {
@@ -50,6 +52,13 @@ def _roles_from_claims(claims: dict[str, Any], audience: str) -> list[str]:
     client_roles = claims.get("resource_access", {}).get(audience, {}).get("roles", [])
     roles.update(client_roles)
     return sorted(str(role) for role in roles)
+
+
+def normalize_tenant_id(value: Any) -> str:
+    """Validate the tenant identifier emitted by the configured identity provider."""
+    if not isinstance(value, str) or not TENANT_ID_PATTERN.fullmatch(value):
+        raise OIDCValidationError("OIDC token does not contain a valid tenant_id claim")
+    return value
 
 
 def validate_access_token(
@@ -89,6 +98,7 @@ def validate_access_token(
     claims["roles"] = _roles_from_claims(claims, config.audience)
     claims["user_id"] = claims.get("sub")
     claims["username"] = claims.get("preferred_username")
+    claims["tenant_id"] = normalize_tenant_id(claims.get("tenant_id"))
     return claims
 
 
@@ -109,15 +119,23 @@ def canonical_route_path(path: str) -> str:
 def required_roles_for_route(path: str, method: str) -> frozenset[str]:
     path = canonical_route_path(path)
     method = method.upper()
+    if path == "/api/audit/events":
+        return frozenset({"admin", "auditor", "platform-admin"})
     admin_prefixes = ("/admin", "/api/admin")
     if any(path == prefix or path.startswith(prefix + "/") for prefix in admin_prefixes):
         return MODEL_ADMIN_ROLES
     if path in {"/models/reload", "/api/models/reload"}:
         return MODEL_ADMIN_ROLES
+    if path in {"/models/candidates", "/api/models/candidates"} or path.startswith(
+        ("/models/candidates/", "/api/models/candidates/")
+    ):
+        return MODEL_ADMIN_ROLES
     if method in {"POST", "PUT", "PATCH", "DELETE"} and path.startswith(("/models/", "/api/models/")):
         return MODEL_ADMIN_ROLES
     if path in {"/ws/alerts", "/api/ws/alerts"}:
         return READ_ROLES
+    if method == "POST" and path.startswith("/api/alerts/") and path.endswith("/decision"):
+        return RESPONSE_ROLES
     if method in {"POST", "PUT", "PATCH", "DELETE"} and path in WRITE_ROUTES:
         return RESPONSE_ROLES
     if method in {"GET", "HEAD", "OPTIONS"}:

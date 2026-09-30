@@ -1,5 +1,7 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useEffect, useState } from "react";
+import { OIDC_REQUIRED } from "../lib/auth";
+import { DEMO_DATA_ENABLED, MODEL_INTEGRATION_ENABLED } from "../lib/featureFlags";
 import { useDashboardStore } from "../store/dashboardStore";
 
 const NAV_ITEMS = [
@@ -34,13 +36,52 @@ function useClock() {
 function ConnectionStatus() {
   const status = useDashboardStore((state) => state.alerts.status);
   const connected = status === "connected";
+  const label = DEMO_DATA_ENABLED ? "Demo data" : connected ? "Live" : "Connecting";
 
   return (
-    <span className="inline-flex items-center gap-2 rounded-md border border-soc-border bg-soc-panelSoft px-2.5 py-1 text-xs text-soc-muted">
-      <span className={connected ? "soc-live-dot" : "inline-block h-2 w-2 rounded-full bg-soc-amber"} />
-      <span className="text-soc-text">{connected ? "Live" : "Connecting"}</span>
-      <span className="hidden sm:inline">stream</span>
+    <span
+      role="status"
+      aria-label={DEMO_DATA_ENABLED ? "Demo data stream" : `${label} alert stream`}
+      className="inline-flex items-center gap-2 rounded-md border border-soc-border bg-soc-panelSoft px-2.5 py-1 text-xs text-soc-muted"
+    >
+      <span className={connected && !DEMO_DATA_ENABLED ? "soc-live-dot" : "inline-block h-2 w-2 rounded-full bg-soc-amber"} />
+      <span className="text-soc-text">{label}</span>
+      {DEMO_DATA_ENABLED ? <span className="hidden sm:inline">stream</span> : null}
     </span>
+  );
+}
+
+function UserBadge() {
+  const { user, roles, isAuthenticated } = useDashboardStore((state) => state.auth);
+  const doSignIn = useDashboardStore((state) => state.signIn);
+  const doSignOut = useDashboardStore((state) => state.signOut);
+
+  if (!isAuthenticated) {
+    return (
+      <button
+        type="button"
+        onClick={doSignIn}
+        className="rounded-md border border-soc-electric/50 px-2.5 py-1 text-xs font-medium text-soc-electric transition hover:bg-soc-electric/10"
+      >
+        Sign in
+      </button>
+    );
+  }
+
+  const username = user?.profile?.preferred_username || user?.profile?.email || "analyst";
+  return (
+    <div className="flex items-center gap-2">
+      <span className="hidden text-xs text-soc-muted sm:inline">
+        {username} · {roles[0] || "analyst"}
+      </span>
+      <button
+        type="button"
+        onClick={doSignOut}
+        className="rounded-md border border-soc-border/70 px-2.5 py-1 text-xs font-medium text-soc-muted transition hover:bg-soc-panelSoft"
+      >
+        Sign out
+      </button>
+    </div>
   );
 }
 
@@ -84,6 +125,7 @@ function TopBar() {
           <span className="hidden font-mono text-xs text-soc-muted soc-tabular md:inline">
             {now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
           </span>
+          <UserBadge />
         </div>
       </div>
     </header>
@@ -96,38 +138,71 @@ export default function AppShell() {
   const hydrateAlerts = useDashboardStore((state) => state.hydrateAlerts);
   const startAlertStream = useDashboardStore((state) => state.startAlertStream);
   const stopAlertStream = useDashboardStore((state) => state.stopAlertStream);
+  const refreshAuth = useDashboardStore((state) => state.refreshAuth);
+  const { isAuthenticated, checked } = useDashboardStore((state) => state.auth);
 
   useEffect(() => {
+    refreshAuth();
+  }, [refreshAuth]);
+
+  const dataAllowed = !OIDC_REQUIRED || isAuthenticated;
+
+  useEffect(() => {
+    if (!dataAllowed) return undefined;
     fetchStats();
     const statsInterval = window.setInterval(fetchStats, 30000);
 
     return () => {
       window.clearInterval(statsInterval);
     };
-  }, [fetchStats]);
+  }, [fetchStats, dataAllowed]);
 
   useEffect(() => {
+    if (!dataAllowed || !MODEL_INTEGRATION_ENABLED) return undefined;
     fetchModelStatus();
     const modelInterval = window.setInterval(fetchModelStatus, 60000);
 
     return () => {
       window.clearInterval(modelInterval);
     };
-  }, [fetchModelStatus]);
+  }, [fetchModelStatus, dataAllowed]);
 
   useEffect(() => {
+    if (!dataAllowed) return undefined;
     hydrateAlerts();
     startAlertStream();
 
     return () => {
       stopAlertStream();
     };
-  }, [hydrateAlerts, startAlertStream, stopAlertStream]);
+  }, [hydrateAlerts, startAlertStream, stopAlertStream, dataAllowed]);
+
+  if (OIDC_REQUIRED && checked && !isAuthenticated) {
+    return (
+      <>
+        <TopBar />
+        <main className="soc-shell flex min-h-[60vh] items-center justify-center">
+          <div className="soc-glass max-w-sm p-6 text-center">
+            <p className="soc-kicker">Sign-in required</p>
+            <h1 className="mt-2 text-lg font-semibold text-soc-text">Sign in to continue</h1>
+            <p className="mt-2 text-sm text-soc-muted">
+              This deployment requires a Keycloak session to view live security data.
+            </p>
+          </div>
+        </main>
+      </>
+    );
+  }
 
   return (
     <>
       <TopBar />
       <main className="soc-shell">
+        {DEMO_DATA_ENABLED ? (
+          <aside className="mb-5 rounded-md border border-soc-amber/35 bg-soc-amber/5 px-4 py-3 text-xs leading-relaxed text-soc-muted">
+            <span className="font-semibold text-soc-amber">Demo data.</span> Seeded events refresh locally. Analyst decisions stay in this browser and are not written to the backend.
+          </aside>
+        ) : null}
         <Outlet />
       </main>
     </>

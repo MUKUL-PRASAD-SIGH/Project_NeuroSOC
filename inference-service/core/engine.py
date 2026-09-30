@@ -18,6 +18,7 @@ except ImportError:  # pragma: no cover - optional in local smoke environments
     KafkaProducer = None
 
 from core.behavioral.profiler import BehavioralProfiler
+from core.kafka_security import kafka_client_security_options
 from core.behavioral.signals import extract_session_vector
 from core.legacy_models import LegacyLSTMClassifier, LegacyMLPClassifier, LegacyXGBoostClassifier
 from core.lnn.classifier import LNNClassifier
@@ -66,6 +67,7 @@ class ThreatVerdict:
     timestamp: float
     model_version: str
     features_dict: dict[str, Any]
+    tenant_id: str = "local"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -80,6 +82,7 @@ class KafkaTopicPublisher:
         try:
             self._producer = KafkaProducer(
                 bootstrap_servers=bootstrap_servers,
+                **kafka_client_security_options(),
                 value_serializer=lambda payload: json.dumps(payload).encode("utf-8"),
             )
         except Exception as exc:  # pragma: no cover - depends on Kafka availability
@@ -487,6 +490,7 @@ class DecisionEngine:
 
     def analyze_session(self, session_data: dict[str, Any]) -> ThreatVerdict:
         session_id = str(session_data.get("session_id", f"session-{int(time.time() * 1000)}"))
+        tenant_id = str(session_data.get("tenant_id") or "local")
         user_id = str(session_data.get("user_id", "unknown-user"))
         source_ip = str(session_data.get("source_ip", "unknown"))
         timestamp = float(session_data.get("timestamp") or time.time())
@@ -507,12 +511,12 @@ class DecisionEngine:
                 snn_score = self._run_snn(feature_vector, raw_feature_vector, features_dict)
                 lnn_class, lnn_confidence = self._run_lnn(feature_vector, raw_feature_vector, session_data, features_dict)
                 xgb_class, xgb_confidence = self._run_xgb(feature_vector, raw_feature_vector, features_dict)
-                behavioral_delta = self.behavioral_profiler.compute_delta(user_id, behavioral_vector)
+                behavioral_delta = self.behavioral_profiler.compute_delta(user_id, behavioral_vector, tenant_id)
                 confidence = self._fuse_confidence(snn_score, lnn_confidence, xgb_confidence, behavioral_delta)
                 verdict = self._derive_verdict(confidence, behavioral_delta)
                 model_version = self.current_model_version
 
-            self.behavioral_profiler.update_profile(user_id, behavioral_vector)
+            self.behavioral_profiler.update_profile(user_id, behavioral_vector, tenant_id)
             threat_verdict = ThreatVerdict(
                 session_id=session_id,
                 user_id=user_id,
@@ -526,11 +530,13 @@ class DecisionEngine:
                 timestamp=timestamp,
                 model_version=model_version,
                 features_dict=features_dict,
+                tenant_id=tenant_id,
             )
             if verdict == "HACKER":
                 self._publish(
                     "alerts",
                     {
+                        "tenant_id": tenant_id,
                         "session_id": session_id,
                         "user_id": user_id,
                         "source_ip": source_ip,
@@ -556,6 +562,7 @@ class DecisionEngine:
                 timestamp=timestamp,
                 model_version=self.current_model_version,
                 features_dict={**features_dict, "_error": str(exc)},
+                tenant_id=tenant_id,
             )
 
     def check_model_version(self) -> bool:
@@ -597,6 +604,34 @@ class DecisionEngine:
             return True
         except Exception as exc:
             log.warning("Failed to hot-swap model version %s: %s", new_version, exc)
+            return False
+
+    def force_activate_manifest(self, payload: dict[str, Any]) -> bool:
+        """Unconditionally activate every model artifact referenced by payload.
+
+        Used by explicit admin actions (model promotion, rollback) where the F1-regression
+        guard in check_model_version() would be wrong: a rollback target's recorded F1 can be
+        lower than whatever bad candidate is currently active, and that is exactly the point.
+        The decision to accept this manifest was already made by the human who approved it.
+        """
+        new_version = str(payload.get("version", "0.0.0"))
+        new_validation_f1 = dict(payload.get("validation_f1", {}))
+        try:
+            with self._lock:
+                snn_path = self._resolve_artifact_path(payload.get("snn"))
+                if snn_path is not None:
+                    self.snn_encoder, self.snn_model = self._load_snn_bundle(snn_path)
+                lnn_path = self._resolve_artifact_path(payload.get("lnn"))
+                if lnn_path is not None:
+                    self.lnn_reservoir, self.lnn_classifier, self.lnn_window_size = self._load_lnn_bundle(lnn_path)
+                xgb_path = self._resolve_artifact_path(payload.get("xgb"))
+                if xgb_path is not None:
+                    self.xgb_model = self._load_xgb_bundle(xgb_path)
+                self.current_model_version = new_version
+                self.current_validation_f1 = new_validation_f1
+            return True
+        except Exception as exc:
+            log.warning("Failed to force-activate manifest version %s: %s", new_version, exc)
             return False
 
     def start_model_monitor(self) -> None:

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   PolarAngleAxis,
   PolarGrid,
@@ -6,7 +6,80 @@ import {
   RadarChart,
   ResponsiveContainer,
 } from "recharts";
+import { OIDC_REQUIRED } from "../lib/auth";
+import { DEMO_DATA_ENABLED } from "../lib/featureFlags";
+import { getSandboxReplay, submitAlertDecision } from "../services/dashboardApi";
 import { useDashboardStore } from "../store/dashboardStore";
+
+const RESPONSE_ROLES = new Set(["operator", "admin"]);
+
+const DECISION_OPTIONS = [
+  { value: "confirm_threat", label: "Confirm threat", tone: "border-soc-red/50 text-soc-red hover:bg-soc-red/10" },
+  { value: "false_positive", label: "False positive", tone: "border-soc-green/50 text-soc-green hover:bg-soc-green/10" },
+  { value: "restore_access", label: "Restore access", tone: "border-soc-amber/50 text-soc-amber hover:bg-soc-amber/10" },
+  { value: "escalate", label: "Escalate", tone: "border-soc-electric/50 text-soc-electric hover:bg-soc-electric/10" },
+];
+
+const statusLabel = {
+  new: "Awaiting review",
+  triaged: "Triaged",
+  closed: "Closed",
+};
+
+function DecisionPanel({ alert }) {
+  const applyAlertDecision = useDashboardStore((state) => state.applyAlertDecision);
+  const { roles } = useDashboardStore((state) => state.auth);
+  const canDecide = !OIDC_REQUIRED || roles.some((role) => RESPONSE_ROLES.has(role));
+  const [pending, setPending] = useState(null);
+  const [error, setError] = useState(null);
+
+  async function handleDecision(decision) {
+    setPending(decision);
+    setError(null);
+    try {
+      const result = await submitAlertDecision(alert.id, decision);
+      applyAlertDecision(alert.id, { status: result.status, decision: result.decision });
+    } catch (err) {
+      setError(err?.response?.data?.detail || "Could not record this decision. Try again.");
+    } finally {
+      setPending(null);
+    }
+  }
+
+  return (
+    <section className="mt-5 rounded-lg border border-soc-border/80 bg-soc-panelSoft/40 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-medium text-soc-muted">Analyst decision</p>
+        <span className="rounded-full border border-soc-border/60 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-soc-muted">
+          {statusLabel[alert.status] || "Awaiting review"}
+        </span>
+      </div>
+      {alert.decision ? (
+        <p className="mt-2 text-xs text-soc-muted">
+          Last decision: <span className="text-soc-text">{alert.decision.replace(/_/g, " ")}</span>
+        </p>
+      ) : null}
+      {canDecide ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {DECISION_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              disabled={pending !== null}
+              onClick={() => handleDecision(option.value)}
+              className={`rounded-md border px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 ${option.tone}`}
+            >
+              {pending === option.value ? "Saving…" : option.label}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-3 text-xs text-soc-muted">Sign in with an operator or admin role to record a decision.</p>
+      )}
+      {error ? <p className="mt-2 text-xs text-soc-red">{error}</p> : null}
+    </section>
+  );
+}
 
 const verdictTone = {
   HACKER: "text-soc-red",
@@ -24,29 +97,24 @@ const verdictBadge = {
 
 const verdictHeadline = {
   HACKER: "Threat",
-  FORGETFUL_USER: "Review — likely genuine user",
+  FORGETFUL_USER: "Review — unusual sign-in pattern",
   LEGITIMATE: "Normal",
   INCONCLUSIVE: "Insufficient Signal",
 };
 
 const verdictExplain = {
   HACKER: (a) =>
-    `This session was classified as a likely attacker with ${Math.round((a.score || 0) * 100)}% confidence. ` +
-    `The SNN detected an anomalous spike pattern, the LNN found no matching behavioural history, ` +
-    `and XGBoost classified the traffic as ${a.raw?.xgb_class || "malicious"}. ` +
-    `The session was diverted to the sandbox.`,
+    `This session was flagged as a likely threat with a ${Math.round((a.score || 0) * 100)}% risk score. ` +
+    `Review the available event evidence and record a decision. Captured sandbox activity appears below when available.`,
   FORGETFUL_USER: (a) =>
-    `This session raised flags (${Math.round((a.score || 0) * 100)}% risk) but did not reach the attacker threshold. ` +
-    `The pattern is consistent with a confused or locked-out user — repeated failures, known device, ` +
-    `behaviour that stopped when challenged. No automated block was applied. ` +
-    `Analyst review is recommended before restoring access.`,
+    `This session was flagged for review with a ${Math.round((a.score || 0) * 100)}% risk score. ` +
+    `Review the available sign-in evidence before choosing whether to restore access or escalate.`,
   LEGITIMATE: (a) =>
-    `All checks passed for this session (risk score ${Math.round((a.score || 0) * 100)}%). ` +
-    `The SNN found no spike anomalies, the LNN matched the user's stored behavioural baseline, ` +
-    `and XGBoost returned ${a.raw?.xgb_class || "BENIGN"}. No action required.`,
+    `This session was classified as normal with a ${Math.round((a.score || 0) * 100)}% risk score. ` +
+    `Review the returned event details if you need to override the result.`,
   INCONCLUSIVE: (a) =>
-    `Not enough signal to make a confident decision (score ${Math.round((a.score || 0) * 100)}%). ` +
-    `The session is being monitored. Further activity will update this verdict automatically.`,
+    `The returned evidence is not enough to classify this session confidently (${Math.round((a.score || 0) * 100)}% risk). ` +
+    `Keep it under review until more signal is available.`,
 };
 
 function ModelBreakdown({ raw }) {
@@ -110,6 +178,40 @@ function ModelBreakdown({ raw }) {
   );
 }
 
+function TopFeatures({ explanation }) {
+  const features = explanation?.topFeatures;
+  if (!features?.length) return null;
+  const maxAbsImpact = Math.max(...features.map((item) => Math.abs(item.impact)), 0.0001);
+
+  return (
+    <div className="mt-4">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-medium text-soc-muted">
+          Top contributing features {explanation.method === "shap" ? "(SHAP)" : "(by magnitude)"}
+        </p>
+      </div>
+      <div className="mt-2 space-y-1.5">
+        {features.map((item) => (
+          <div key={item.feature} className="flex items-center gap-2 text-xs">
+            <span className="w-28 shrink-0 truncate font-mono text-[11px] text-soc-text" title={item.feature}>
+              {item.feature}
+            </span>
+            <div className="h-1.5 flex-1 rounded-full bg-soc-panelSoft">
+              <div
+                className={`h-1.5 rounded-full ${item.impact >= 0 ? "bg-soc-red" : "bg-soc-electric"}`}
+                style={{ width: `${Math.max((Math.abs(item.impact) / maxAbsImpact) * 100, 4)}%` }}
+              />
+            </div>
+            <span className="soc-tabular w-14 shrink-0 text-right font-mono text-[11px] text-soc-muted">
+              {item.value.toFixed(2)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function VerdictHistory({ recentVerdicts }) {
   if (!recentVerdicts?.length) return null;
   return (
@@ -141,6 +243,95 @@ function VerdictHistory({ recentVerdicts }) {
   );
 }
 
+const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+
+function describeSandboxAction(action) {
+  const body = action.body || {};
+  if (body.event === "diverted_to_sandbox") {
+    return {
+      title: "Session diverted to decoy vault",
+      detail: `${body.failed_logins} failed sign-ins with ${body.distinct_passwords} different passwords; attacker was shown a successful login.`,
+      tone: "text-soc-amber",
+    };
+  }
+  if (action.path?.includes("/transfer")) {
+    return {
+      title: `Transfer attempt · ${currency.format(Number(body.amount) || 0)}`,
+      detail: `To ${body.destination || "unknown account"}. Confirmed to the attacker; no funds moved.`,
+      tone: "text-soc-red",
+    };
+  }
+  if (action.path?.includes("web-attack")) {
+    return { title: `Web attack · ${body.attack_type || "payload"}`, detail: body.payload || "", tone: "text-soc-red" };
+  }
+  if (action.path?.includes("honeypot")) {
+    return { title: "Honeypot field touched", detail: `Source: ${body.source || "form"}`, tone: "text-soc-red" };
+  }
+  return { title: `${action.method} ${action.path}`, detail: "", tone: "text-soc-muted" };
+}
+
+function SandboxActivity({ sessionId }) {
+  const [replay, setReplay] = useState(undefined);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const data = await getSandboxReplay(sessionId);
+      if (!cancelled) setReplay(data);
+    };
+    load();
+    // Keep the timeline live while the attacker is still inside the decoy.
+    const timer = window.setInterval(load, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [sessionId]);
+
+  const actions = replay?.actions || [];
+
+  return (
+    <section className="mt-5 rounded-lg border border-soc-red/30 bg-soc-red/5 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-medium text-soc-muted">Sandbox activity</p>
+        {replay?.sandbox_token ? (
+          <span className="font-mono text-[11px] text-soc-muted">{replay.sandbox_token}</span>
+        ) : null}
+      </div>
+      <p className="mt-1 text-xs text-soc-muted">Everything this session did inside the decoy environment.</p>
+      {replay === undefined ? (
+        <p className="mt-4 text-sm text-soc-muted">Loading captured activity…</p>
+      ) : actions.length ? (
+        <ol className="mt-4 space-y-3">
+          {actions.map((action, index) => {
+            const item = describeSandboxAction(action);
+            return (
+              <li key={`${action.timestamp}-${index}`} className="flex gap-3">
+                <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-soc-red/80" />
+                <div className="min-w-0">
+                  <p className={`text-sm font-medium ${item.tone}`}>
+                    {item.title}
+                    <span className="ml-2 text-xs font-normal text-soc-muted">
+                      {new Date(Number(action.timestamp) * 1000).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        second: "2-digit",
+                      })}
+                    </span>
+                  </p>
+                  {item.detail ? <p className="mt-0.5 break-words text-xs text-soc-muted">{item.detail}</p> : null}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      ) : (
+        <p className="mt-4 text-sm text-soc-muted">No sandbox activity captured for this session.</p>
+      )}
+    </section>
+  );
+}
+
 export default function UserProfileModal() {
   const modal = useDashboardStore((state) => state.modal);
   const closeUserModal = useDashboardStore((state) => state.closeUserModal);
@@ -150,7 +341,7 @@ export default function UserProfileModal() {
   if (!modal.open || !alert) return null;
 
   const verdict = alert.verdict || "INCONCLUSIVE";
-  const explain = (verdictExplain[verdict] || verdictExplain.INCONCLUSIVE)(alert);
+  const explain = alert.explanation?.summary || (verdictExplain[verdict] || verdictExplain.INCONCLUSIVE)(alert);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
@@ -217,10 +408,12 @@ export default function UserProfileModal() {
               {/* Left — radar + model breakdown */}
               <section className="rounded-lg border border-soc-border/80 bg-soc-panelSoft/40 p-4">
                 <p className="text-xs font-medium text-soc-muted">
-                  Behavioural Signal Radar
+                  {DEMO_DATA_ENABLED ? "Illustrative Signal Profile" : "Behavioural Signal Radar"}
                 </p>
                 <p className="mt-1 text-xs text-soc-muted">
-                  Each axis is a normalised signal extracted from the session. Higher = more anomalous.
+                  {DEMO_DATA_ENABLED
+                    ? "Sample values show where session signals will appear; these are not Colab model outputs."
+                    : "Normalised signals returned with this session. Higher values are more anomalous."}
                 </p>
                 <div className="mt-3 h-[300px]">
                   <ResponsiveContainer width="100%" height="100%">
@@ -241,7 +434,12 @@ export default function UserProfileModal() {
                 <p className="mt-4 text-xs font-medium text-soc-muted">
                   Model Breakdown
                 </p>
-                <ModelBreakdown raw={alert.raw} />
+                {DEMO_DATA_ENABLED && !alert.raw ? (
+                  <p className="mt-2 text-xs leading-relaxed text-soc-muted">
+                    Model-level scores will appear here when the Colab inference output is connected.
+                  </p>
+                ) : <ModelBreakdown raw={alert.raw} />}
+                <TopFeatures explanation={alert.explanation} />
               </section>
 
               {/* Right — verdict history */}
@@ -259,6 +457,9 @@ export default function UserProfileModal() {
                 )}
               </section>
             </div>
+
+            {verdict === "HACKER" ? <DecisionPanel alert={alert} /> : null}
+            {verdict === "HACKER" ? <SandboxActivity sessionId={alert.id} /> : null}
           </>
         )}
       </div>

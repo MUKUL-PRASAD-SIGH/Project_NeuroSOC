@@ -13,6 +13,16 @@ scrape_configs:
       - targets: ["sandbox:8001"]
     metrics_path: /metrics
 
+  - job_name: neuroshield-ingestion
+    static_configs:
+      - targets: ["ingestion:8080"]
+    metrics_path: /metrics
+
+  - job_name: neuroshield-feature
+    static_configs:
+      - targets: ["feature:9101"]
+    metrics_path: /metrics
+
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9090"]

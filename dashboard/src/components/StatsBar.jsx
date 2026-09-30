@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { DEMO_DATA_ENABLED } from "../lib/featureFlags";
 import { useDashboardStore } from "../store/dashboardStore";
 
 function StatCard({ label, value, hint, accent }) {
@@ -16,6 +17,7 @@ function StatCard({ label, value, hint, accent }) {
 
 export default function StatsBar() {
   const stats = useDashboardStore((state) => state.stats.data);
+  const demoAlertCount = useDashboardStore((state) => state.alerts.items.length);
 
   const cards = useMemo(
     () => [
@@ -33,18 +35,18 @@ export default function StatsBar() {
       },
       {
         label: "Average risk",
-        value: Number(stats.avgRiskScore || 0).toFixed(2),
-        hint: "Mean confidence, 0 to 1",
+        value: `${Number(stats.avgRiskScore || 0).toFixed(1)}%`,
+        hint: "Mean risk score across analyzed sessions",
         accent: "bg-soc-amber",
       },
       {
-        label: "Open alerts",
-        value: Number(stats.liveAlerts || 0).toLocaleString(),
-        hint: "Awaiting analyst review",
+        label: DEMO_DATA_ENABLED ? "Events in demo feed" : "Recent events",
+        value: Number(DEMO_DATA_ENABLED ? demoAlertCount : stats.liveAlerts || 0).toLocaleString(),
+        hint: DEMO_DATA_ENABLED ? "Seeded examples plus generated stream" : "Available for investigation",
         accent: "bg-soc-green",
       },
     ],
-    [stats]
+    [stats, demoAlertCount]
   );
 
   return (

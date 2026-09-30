@@ -4,6 +4,7 @@ import asyncio
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "inference-service"
 
 import main as inference_main
 from core.auth import OIDCConfig, OIDCValidationError
+from core.audit_chain import GENESIS_HASH, audit_event_hash
 
 
 @pytest.fixture
@@ -32,7 +34,14 @@ def protected_client(monkeypatch):
     def fake_validate_access_token(token: str, _config: OIDCConfig) -> dict[str, object]:
         if token == "invalid":
             raise OIDCValidationError("Invalid OIDC access token")
-        return {"sub": "test-user", "roles": [token]}
+        if token == "no-tenant":
+            return {"sub": "test-user", "roles": ["analyst"]}
+        role, separator, tenant_id = token.partition("@")
+        return {
+            "sub": "test-user",
+            "tenant_id": tenant_id if separator else "test-tenant",
+            "roles": [role],
+        }
 
     monkeypatch.setattr(inference_main, "validate_access_token", fake_validate_access_token)
     client = TestClient(inference_main.app)
@@ -45,6 +54,26 @@ def test_read_endpoint_allows_each_read_role(protected_client, role):
     response = protected_client.get("/api/stats", headers={"Authorization": f"Bearer {role}"})
 
     assert response.status_code == 200
+
+
+def test_oidc_requires_signed_tenant_claim_and_ignores_tenant_header(protected_client):
+    missing = protected_client.get("/api/v1/stats", headers={"Authorization": "Bearer no-tenant"})
+    assert missing.status_code == 401
+
+    with inference_main.runtime._lock:
+        inference_main.runtime._latest_alerts.extend(
+            [
+                {"tenant_id": "test-tenant", "session_id": "tenant-a-alert", "user_id": "alice", "source_ip": "192.0.2.1", "verdict": "HACKER", "confidence": 0.9},
+                {"tenant_id": "tenant-b", "session_id": "tenant-b-alert", "user_id": "bob", "source_ip": "192.0.2.2", "verdict": "HACKER", "confidence": 0.9},
+            ]
+        )
+
+    response = protected_client.get(
+        "/api/v1/alerts/latest",
+        headers={"Authorization": "Bearer analyst", "X-Tenant-ID": "tenant-b"},
+    )
+    assert response.status_code == 200
+    assert [item["session_id"] for item in response.json()["items"]] == ["tenant-a-alert"]
 
 
 def test_versioned_routes_are_canonical_and_legacy_api_prefix_still_works(protected_client):
@@ -148,6 +177,122 @@ def test_rate_limit_returns_retry_after_header(protected_client, monkeypatch):
     assert limited.status_code == 429
     assert int(limited.headers["retry-after"]) >= 1
     assert limited.json()["detail"] == "Rate limit exceeded."
+
+
+def test_rate_limit_uses_atomic_shared_redis_counters_across_replicas():
+    class SharedRedis:
+        def __init__(self):
+            self.values = {}
+            self.keys = []
+
+        def eval(self, script, key_count, key, ttl):
+            assert key_count == 1
+            assert "INCR" in script and "EXPIRE" in script
+            assert 1 <= ttl <= 61
+            self.keys.append(key)
+            self.values[key] = self.values.get(key, 0) + 1
+            return self.values[key]
+
+    redis_backend = SharedRedis()
+    limiter_a = inference_main.FixedWindowRateLimiter(
+        2, redis_client=redis_backend, key_secret="shared-test-key" * 3
+    )
+    limiter_b = inference_main.FixedWindowRateLimiter(
+        2, redis_client=redis_backend, key_secret="shared-test-key" * 3
+    )
+    assert limiter_a.check("203.0.113.7", now=120.25) is None
+    assert limiter_b.check("203.0.113.7", now=120.25) is None
+    assert limiter_a.check("203.0.113.7", now=120.25) == 60
+    assert len(set(redis_backend.keys)) == 1
+    assert "203.0.113.7" not in redis_backend.keys[0]
+
+
+def test_shared_rate_limiter_fails_closed_when_redis_is_unavailable(protected_client, monkeypatch):
+    class OfflineRedis:
+        def eval(self, *_args):
+            raise ConnectionError("offline")
+
+    monkeypatch.setattr(inference_main.rate_limiter, "redis_client", OfflineRedis())
+    monkeypatch.setattr(inference_main.rate_limiter, "fail_closed", True)
+    response = protected_client.get("/api/v1/stats", headers={"Authorization": "Bearer analyst"})
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "5"
+    assert response.json()["detail"] == "Rate limiting is temporarily unavailable."
+
+
+def test_local_rate_limiter_falls_back_to_process_window_when_redis_is_unavailable():
+    class OfflineRedis:
+        def eval(self, *_args):
+            raise ConnectionError("offline")
+
+    limiter = inference_main.FixedWindowRateLimiter(1, redis_client=OfflineRedis())
+    assert limiter.check("127.0.0.1", now=100.0) is None
+    assert limiter.check("127.0.0.1", now=101.0) == 59
+
+
+def _make_audit_export_row(tenant_id, sequence=1, previous_hash=GENESIS_HASH):
+    from datetime import datetime, timezone
+
+    event = {
+        "event_id": f"audit-{tenant_id}-{sequence}",
+        "tenant_id": tenant_id,
+        "event_type": "security.authentication",
+        "outcome": "succeeded",
+        "actor_id": "auditor-1",
+        "actor_roles": ["auditor"],
+        "http_method": "GET",
+        "route": "/api/v1/alerts",
+        "source_ip": "192.0.2.12",
+        "resource_id": None,
+        "details": {"method": "oidc_bearer"},
+        "chain_id": tenant_id,
+        "chain_sequence": sequence,
+        "created_at": datetime(2026, 9, 30, 12, 0, sequence, tzinfo=timezone.utc),
+    }
+    event_hash = audit_event_hash(previous_hash, event)
+    return {**event, "previous_hash": previous_hash, "event_hash": event_hash}
+
+
+def test_audit_export_is_limited_to_auditor_roles_and_request_tenant(protected_client, monkeypatch):
+    requested = []
+
+    def list_events(tenant_id, after_sequence, limit):
+        requested.append((tenant_id, after_sequence, limit))
+        return GENESIS_HASH, [_make_audit_export_row(tenant_id)]
+
+    monkeypatch.setattr(inference_main.runtime.repository, "list_audit_events", list_events)
+    denied = protected_client.get(
+        "/api/v1/audit/events", headers={"Authorization": "Bearer analyst@tenant-a"}
+    )
+    assert denied.status_code == 403
+    assert requested == []
+
+    exported = protected_client.get(
+        "/api/v1/audit/events?limit=25",
+        headers={"Authorization": "Bearer auditor@tenant-a"},
+    )
+    assert exported.status_code == 200
+    assert exported.json()["tenant_id"] == "tenant-a"
+    assert exported.json()["events"][0]["event_hash"]
+    assert exported.json()["chain_valid"] is True
+    assert requested == [("tenant-a", 0, 25)]
+
+
+def test_audit_export_rejects_modified_chain_events(protected_client, monkeypatch):
+    event = _make_audit_export_row("tenant-a")
+    event["outcome"] = "denied"
+    monkeypatch.setattr(
+        inference_main.runtime.repository,
+        "list_audit_events",
+        lambda *_args: (GENESIS_HASH, [event]),
+    )
+
+    response = protected_client.get(
+        "/api/v1/audit/events", headers={"Authorization": "Bearer auditor@tenant-a"}
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Audit chain integrity verification failed."
 
 
 def test_cors_preflight_reaches_cors_middleware_without_bearer_token(protected_client):
@@ -390,7 +535,7 @@ def test_simulation_endpoints_are_hidden_by_default(protected_client, monkeypatc
     assert versioned_response.status_code == 404
 
 
-@pytest.mark.parametrize("role", ["analyst", "operator", "auditor"])
+@pytest.mark.parametrize("role", ["analyst", "operator", "admin", "auditor"])
 def test_model_reload_denies_non_admin_roles(protected_client, monkeypatch, role):
     monkeypatch.setattr(inference_main.runtime.engine, "check_model_version", lambda: False)
 
@@ -399,10 +544,10 @@ def test_model_reload_denies_non_admin_roles(protected_client, monkeypatch, role
     assert response.status_code == 403
 
 
-def test_model_reload_allows_admin(protected_client, monkeypatch):
+def test_model_reload_allows_platform_admin(protected_client, monkeypatch):
     monkeypatch.setattr(inference_main.runtime.engine, "check_model_version", lambda: False)
 
-    response = protected_client.post("/api/v1/models/reload", headers={"Authorization": "Bearer admin"})
+    response = protected_client.post("/api/v1/models/reload", headers={"Authorization": "Bearer platform-admin"})
 
     assert response.status_code == 200
     assert response.json()["reloaded"] is False
@@ -479,8 +624,9 @@ def test_response_route_allows_operator(protected_client, monkeypatch):
 
 
 class FakeWebSocket:
-    def __init__(self, authorization: str):
+    def __init__(self, authorization: str, query_params: dict[str, str] | None = None):
         self.headers = {"authorization": authorization}
+        self.query_params = query_params or {}
         self.url = SimpleNamespace(path="/ws/alerts")
         self.state = SimpleNamespace()
         self.closed_with: tuple[int, str] | None = None
@@ -505,6 +651,16 @@ def test_alert_websocket_applies_role_policy(protected_client):
     ]
     assert [event["outcome"] for event in websocket_events] == ["succeeded", "denied"]
     assert websocket_events[-1]["actor_id"] == "test-user"
+
+
+def test_alert_websocket_accepts_token_via_query_param(protected_client):
+    # Browsers cannot set a custom header on a WebSocket handshake; the dashboard passes the
+    # token as ?access_token=... instead, and the backend must accept it as a fallback.
+    _ = protected_client
+    query_param_identity = FakeWebSocket("", query_params={"access_token": "operator"})
+
+    assert asyncio.run(inference_main._authorize_websocket(query_param_identity)) is True
+    assert query_param_identity.state.identity["roles"] == ["operator"]
 
 
 def test_simulated_response_action_is_audited_without_request_body(protected_client, monkeypatch):
@@ -616,6 +772,9 @@ def test_audit_repository_uses_parameterized_database_insert(monkeypatch):
         def execute(self, query, parameters):
             calls.append((query, parameters))
 
+        def fetchone(self):
+            return None
+
     class FakeConnection:
         closed = False
 
@@ -633,7 +792,7 @@ def test_audit_repository_uses_parameterized_database_insert(monkeypatch):
 
     connection = FakeConnection()
     repository = inference_main.VerdictRepository("postgresql://audit-test")
-    monkeypatch.setattr(repository, "_connect", lambda: connection)
+    monkeypatch.setattr(repository, "_connect", lambda *_args: connection)
     event = inference_main._new_security_audit_event(
         "security.authentication",
         "succeeded",
@@ -647,8 +806,9 @@ def test_audit_repository_uses_parameterized_database_insert(monkeypatch):
 
     repository.record_audit_event(event)
 
-    assert len(calls) == 1
-    query, parameters = calls[0]
+    assert len(calls) == 3
+    assert "pg_advisory_xact_lock" in calls[0][0]
+    query, parameters = calls[-1]
     assert "INSERT INTO security_audit_events" in query
     assert event["event_id"] in parameters
     assert "user-123" in parameters
@@ -656,7 +816,28 @@ def test_audit_repository_uses_parameterized_database_insert(monkeypatch):
     assert connection.closed is True
 
 
-def configure_valid_production_environment(monkeypatch):
+def configure_valid_production_environment(monkeypatch, tmp_path):
+    kafka_ca = tmp_path / "trusted-kafka-ca.pem"
+    kafka_ca.write_text("test CA bundle", encoding="utf-8")
+    postgres_ca = tmp_path / "trusted-postgres-ca.pem"
+    postgres_ca.write_text("test PostgreSQL CA bundle", encoding="utf-8")
+    monkeypatch.setenv("KAFKA_SECURITY_PROTOCOL", "SASL_SSL")
+    monkeypatch.setenv("KAFKA_SASL_MECHANISM", "SCRAM-SHA-512")
+    monkeypatch.setenv("KAFKA_SASL_USERNAME", "inference-service")
+    monkeypatch.setenv("KAFKA_SASL_PASSWORD", "test-kafka-password")
+    monkeypatch.setenv("KAFKA_SSL_CA_LOCATION", str(kafka_ca))
+    monkeypatch.setattr(
+        inference_main,
+        "REDIS_URL",
+        "rediss://rate-limit-user:test-redis-password@redis.example.com:6379/0",
+    )
+    monkeypatch.setattr(inference_main, "RATE_LIMIT_HASH_SECRET", "h" * 32)
+
+    class AvailableRedis:
+        def ping(self):
+            return True
+
+    monkeypatch.setattr(inference_main, "REDIS_CLIENT", AvailableRedis())
     monkeypatch.setattr(inference_main, "APP_ENV", "production")
     monkeypatch.setattr(inference_main, "OIDC_REQUIRED", True)
     monkeypatch.setattr(inference_main, "OIDC_ISSUER", "https://identity.example.com/realms/neurosoc")
@@ -665,26 +846,38 @@ def configure_valid_production_environment(monkeypatch):
     monkeypatch.setattr(
         inference_main,
         "DATABASE_URL",
-        "postgresql://neurosoc_app:managed-secret@db.example.com:5432/neurosoc",
+        "postgresql://neurosoc_app:managed-secret@db.example.com:5432/neurosoc"
+        f"?sslmode=verify-full&sslrootcert={quote(str(postgres_ca), safe='')}",
     )
+    monkeypatch.setattr(inference_main, "SANDBOX_BASE_URL", "http://sandbox.example.com")
+    monkeypatch.setattr(inference_main, "SANDBOX_SERVICE_TOKEN", "s" * 32)
 
 
-def test_production_startup_accepts_explicit_secure_configuration(monkeypatch):
-    configure_valid_production_environment(monkeypatch)
+def test_production_startup_accepts_explicit_secure_configuration(monkeypatch, tmp_path):
+    configure_valid_production_environment(monkeypatch, tmp_path)
 
     inference_main._validate_startup_configuration()
 
 
-def test_production_startup_rejects_simulation_api(monkeypatch):
-    configure_valid_production_environment(monkeypatch)
+def test_production_startup_rejects_simulation_api(monkeypatch, tmp_path):
+    configure_valid_production_environment(monkeypatch, tmp_path)
     monkeypatch.setattr(inference_main, "ENABLE_SIMULATION_API", True)
 
     with pytest.raises(RuntimeError, match="Simulation APIs"):
         inference_main._validate_startup_configuration()
 
 
-def test_production_startup_rejects_wildcard_cors_and_demo_database(monkeypatch):
-    configure_valid_production_environment(monkeypatch)
+@pytest.mark.parametrize("token", ["", "too-short"])
+def test_production_startup_rejects_missing_or_weak_sandbox_service_token(monkeypatch, token, tmp_path):
+    configure_valid_production_environment(monkeypatch, tmp_path)
+    monkeypatch.setattr(inference_main, "SANDBOX_SERVICE_TOKEN", token)
+
+    with pytest.raises(RuntimeError, match="SANDBOX_SERVICE_TOKEN"):
+        inference_main._validate_startup_configuration()
+
+
+def test_production_startup_rejects_wildcard_cors_and_demo_database(monkeypatch, tmp_path):
+    configure_valid_production_environment(monkeypatch, tmp_path)
     monkeypatch.setattr(inference_main, "ALLOWED_ORIGINS", ["*"])
 
     with pytest.raises(RuntimeError, match="CORS_ALLOWED_ORIGINS"):
@@ -699,6 +892,71 @@ def test_production_startup_rejects_wildcard_cors_and_demo_database(monkeypatch)
     monkeypatch.setattr(inference_main, "DATABASE_URL", "postgresql://ns_user:ns_pass@db/neurosoc")
 
     with pytest.raises(RuntimeError, match="non-demo DATABASE_URL"):
+        inference_main._validate_startup_configuration()
+
+
+def test_production_startup_rejects_change_me_database_credentials(monkeypatch, tmp_path):
+    configure_valid_production_environment(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        inference_main,
+        "DATABASE_URL",
+        "postgresql://neurosoc_app:CHANGE_ME_local_postgres_password@db.example.com:5432/neurosoc",
+    )
+
+    with pytest.raises(RuntimeError, match="non-demo DATABASE_URL"):
+        inference_main._validate_startup_configuration()
+
+
+def test_production_startup_rejects_postgres_without_verified_tls(monkeypatch, tmp_path):
+    configure_valid_production_environment(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        inference_main,
+        "DATABASE_URL",
+        "postgresql://neurosoc_app:managed-secret@db.example.com:5432/neurosoc?sslmode=require",
+    )
+
+    with pytest.raises(RuntimeError, match="sslmode=verify-full"):
+        inference_main._validate_startup_configuration()
+
+
+def test_production_startup_rejects_missing_postgres_ca_file(monkeypatch, tmp_path):
+    configure_valid_production_environment(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        inference_main,
+        "DATABASE_URL",
+        "postgresql://neurosoc_app:managed-secret@db.example.com:5432/neurosoc"
+        "?sslmode=verify-full&sslrootcert=C%3A%2Fmissing-postgres-ca.pem",
+    )
+
+    with pytest.raises(RuntimeError, match="readable server CA certificate"):
+        inference_main._validate_startup_configuration()
+
+
+def test_production_startup_rejects_unsecured_redis(monkeypatch, tmp_path):
+    configure_valid_production_environment(monkeypatch, tmp_path)
+    monkeypatch.setattr(inference_main, "REDIS_URL", "redis://user:password@redis.example.com:6379/0")
+
+    with pytest.raises(RuntimeError, match="credentialed rediss:// REDIS_URL"):
+        inference_main._validate_startup_configuration()
+
+
+def test_production_startup_rejects_missing_rate_limit_hash_secret(monkeypatch, tmp_path):
+    configure_valid_production_environment(monkeypatch, tmp_path)
+    monkeypatch.setattr(inference_main, "RATE_LIMIT_HASH_SECRET", "short")
+
+    with pytest.raises(RuntimeError, match="RATE_LIMIT_HASH_SECRET"):
+        inference_main._validate_startup_configuration()
+
+
+def test_production_startup_rejects_unavailable_redis(monkeypatch, tmp_path):
+    configure_valid_production_environment(monkeypatch, tmp_path)
+
+    class OfflineRedis:
+        def ping(self):
+            raise ConnectionError("offline")
+
+    monkeypatch.setattr(inference_main, "REDIS_CLIENT", OfflineRedis())
+    with pytest.raises(RuntimeError, match="reachable Redis"):
         inference_main._validate_startup_configuration()
 
 

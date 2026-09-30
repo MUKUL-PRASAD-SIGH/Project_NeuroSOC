@@ -1,4 +1,5 @@
 import { apiClient, buildWsUrl, getApiBaseUrl } from "../lib/apiClient";
+import { getAccessToken } from "../lib/auth";
 import {
   createMockAlert,
   mockAlerts,
@@ -76,6 +77,9 @@ function normalizeAlert(alert) {
     dimensions: Array.isArray(alert.dimensions) ? alert.dimensions : [],
     recentVerdicts: Array.isArray(alert.recentVerdicts) ? alert.recentVerdicts : [],
     modelVersion: alert.modelVersion || null,
+    status: alert.status || "new",
+    decision: alert.decision || null,
+    explanation: alert.explanation || null,
   };
 }
 
@@ -125,6 +129,60 @@ export async function getAlerts() {
   );
 }
 
+export async function getSandboxReplay(sessionId) {
+  if (USE_MOCKS || !sessionId) {
+    return null;
+  }
+  try {
+    const { data } = await apiClient.get(`/api/v1/sandbox/${encodeURIComponent(sessionId)}/replay`);
+    return data;
+  } catch {
+    // Sessions that were never diverted have no replay.
+    return null;
+  }
+}
+
+export async function getModelCandidates() {
+  if (USE_MOCKS) {
+    return [];
+  }
+  const { data } = await apiClient.get("/api/v1/models/candidates");
+  return Array.isArray(data) ? data : [];
+}
+
+export async function promoteModelCandidate(candidateId) {
+  const { data } = await apiClient.post(`/api/v1/models/candidates/${encodeURIComponent(candidateId)}/promote`);
+  return data;
+}
+
+export async function rejectModelCandidate(candidateId) {
+  const { data } = await apiClient.post(`/api/v1/models/candidates/${encodeURIComponent(candidateId)}/reject`);
+  return data;
+}
+
+export async function rollbackModel() {
+  const { data } = await apiClient.post("/api/v1/models/rollback");
+  return data;
+}
+
+export async function submitAlertDecision(sessionId, decision, notes) {
+  if (USE_MOCKS || !sessionId) {
+    return {
+      sessionId,
+      decision,
+      status: decision === "confirm_threat" || decision === "false_positive" ? "closed" : "triaged",
+      decidedBy: "mock-analyst",
+      decidedAt: new Date().toISOString(),
+      trainingLabelWritten: null,
+    };
+  }
+  const { data } = await apiClient.post(
+    `/api/v1/alerts/${encodeURIComponent(sessionId)}/decision`,
+    { decision, notes: notes || null }
+  );
+  return data;
+}
+
 export function subscribeToAlerts({ onMessage, onStatusChange, onError }) {
   if (USE_MOCKS || (preferMockData && isDevelopmentMockFallbackEnabled())) {
     return startMockAlertStream({ onMessage, onStatusChange });
@@ -143,14 +201,20 @@ export function subscribeToAlerts({ onMessage, onStatusChange, onError }) {
     stopMockStream = startMockAlertStream({ onMessage, onStatusChange });
   };
 
-  const connect = () => {
+  const connect = async () => {
     if (isClosed || stopMockStream) {
       return;
     }
 
     onStatusChange?.("connecting");
 
-    socket = new WebSocket(buildWsUrl("/api/v1/ws/alerts"));
+    const token = await getAccessToken();
+    const wsUrl = buildWsUrl("/api/v1/ws/alerts");
+    socket = new WebSocket(token ? `${wsUrl}?access_token=${encodeURIComponent(token)}` : wsUrl);
+    if (isClosed) {
+      socket.close();
+      return;
+    }
 
     socket.onopen = () => {
       onStatusChange?.("connected");

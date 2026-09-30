@@ -22,3 +22,88 @@ jobs:
         run: node --test tests/test_production_build_guard.mjs
       - name: Scan production paths for known demo credentials
         run: python scripts/check_production_credential_patterns.py
+
+  backend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install backend test dependencies
+        # inference-service/requirements.txt is the superset that also covers what
+        # feedback-service, retraining-service, sandbox-service, and ingestion-service
+        # need to import cleanly under pytest.
+        run: pip install -r inference-service/requirements.txt pytest jsonschema
+      - name: Run backend test suite
+        run: pytest tests/ -q
+
+  frontend-builds:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        app: [dashboard, simulation_portal]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        working-directory: ${{ matrix.app }}
+        run: npm install --legacy-peer-deps
+      - name: Production build (mocks disabled)
+        working-directory: ${{ matrix.app }}
+        env:
+          VITE_USE_MOCKS: "false"
+        run: npm run build
+
+  docker-image-builds:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service:
+          - dashboard
+          - feature-service
+          - feedback-service
+          - inference-service
+          - ingestion-service
+          - retraining-service
+          - sandbox-service
+          - simulation_portal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ${{ matrix.service }} image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.service }}
+          push: false
+          load: true
+          tags: neurosoc/${{ matrix.service }}:ci
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+      - name: Generate image SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: neurosoc/${{ matrix.service }}:ci
+          format: spdx-json
+          output-file: ./sbom-${{ matrix.service }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Upload image SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: neurosoc-${{ matrix.service }}-sbom
+          path: ./sbom-${{ matrix.service }}.spdx.json
+          if-no-files-found: error
+          retention-days: 30
+
+  compose-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate docker-compose.yml renders with required variables
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
