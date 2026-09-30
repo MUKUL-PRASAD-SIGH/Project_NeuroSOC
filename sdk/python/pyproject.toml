@@ -4,11 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neurosoc"
-version = "0.1.0"
+version = "0.1.1"
 description = "NeuroSOC SDK for backends and AI agents: check session verdicts and guard agent tool calls before they run."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
+authors = [{ name = "NeuroSOC Team" }]
 requires-python = ">=3.9"
 dependencies = []
 keywords = ["security", "bot-detection", "fraud", "ai-agents", "behavioral-analytics"]
