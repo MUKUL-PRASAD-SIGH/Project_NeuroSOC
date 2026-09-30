@@ -62,6 +62,7 @@ from core.auth import (
     required_roles_for_route,
     validate_access_token,
 )
+from core.audit_chain import GENESIS_HASH, audit_event_hash, verify_audit_event
 from core.kafka_security import kafka_client_security_options
 
 
@@ -403,6 +404,35 @@ class AlertDecisionResponse(StrictResponseModel):
     decidedBy: StrictStr
     decidedAt: datetime
     trainingLabelWritten: StrictStr | None = None
+
+
+class AuditEventExportResponse(StrictResponseModel):
+    event_id: StrictStr
+    tenant_id: StrictStr
+    chain_id: StrictStr
+    chain_sequence: StrictInt
+    previous_hash: StrictStr
+    event_hash: StrictStr
+    event_type: StrictStr
+    outcome: StrictStr
+    actor_id: StrictStr | None = None
+    actor_roles: list[StrictStr]
+    http_method: StrictStr | None = None
+    route: StrictStr
+    source_ip: StrictStr | None = None
+    resource_id: StrictStr | None = None
+    details: dict[str, Any]
+    created_at: datetime
+
+
+class AuditEventsExportResponse(StrictResponseModel):
+    tenant_id: StrictStr
+    events: list[AuditEventExportResponse]
+    after_sequence: StrictInt
+    next_sequence: StrictInt
+    chain_anchor_hash: StrictStr
+    chain_valid: StrictBool
+    has_more: StrictBool
 
 
 class RootResponse(StrictResponseModel):
@@ -1301,6 +1331,10 @@ class VerdictRepository:
                     CREATE TABLE IF NOT EXISTS security_audit_events (
                         event_id TEXT PRIMARY KEY,
                         tenant_id TEXT,
+                        chain_id TEXT,
+                        chain_sequence BIGINT,
+                        previous_hash TEXT,
+                        event_hash TEXT,
                         event_type TEXT NOT NULL,
                         outcome TEXT NOT NULL,
                         actor_id TEXT,
@@ -1351,6 +1385,47 @@ class VerdictRepository:
                 # unassigned so tenant-scoped queries cannot expose it to any customer.
                 for table_name in ("verdicts", "alerts", "security_audit_events", "alert_decisions", "labeled_training_data"):
                     cur.execute(f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS tenant_id TEXT")
+                for column_name, column_type in (
+                    ("chain_id", "TEXT"),
+                    ("chain_sequence", "BIGINT"),
+                    ("previous_hash", "TEXT"),
+                    ("event_hash", "TEXT"),
+                ):
+                    cur.execute(
+                        f"ALTER TABLE security_audit_events ADD COLUMN IF NOT EXISTS {column_name} {column_type}"
+                    )
+                cur.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_security_audit_chain_sequence "
+                    "ON security_audit_events (chain_id, chain_sequence) "
+                    "WHERE chain_id IS NOT NULL AND chain_sequence IS NOT NULL"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_security_audit_tenant_sequence "
+                    "ON security_audit_events (tenant_id, chain_sequence)"
+                )
+                cur.execute(
+                    "CREATE OR REPLACE FUNCTION neurosoc_reject_audit_mutation() "
+                    "RETURNS trigger LANGUAGE plpgsql AS $$ "
+                    "BEGIN RAISE EXCEPTION 'security_audit_events is append-only'; END; $$"
+                )
+                cur.execute(
+                    "DO $neurosoc$ BEGIN IF NOT EXISTS ("
+                    "SELECT 1 FROM pg_trigger WHERE tgname = 'neurosoc_audit_append_only' "
+                    "AND tgrelid = 'security_audit_events'::regclass AND NOT tgisinternal"
+                    ") THEN CREATE TRIGGER neurosoc_audit_append_only "
+                    "BEFORE UPDATE OR DELETE ON security_audit_events "
+                    "FOR EACH ROW EXECUTE FUNCTION neurosoc_reject_audit_mutation(); "
+                    "END IF; END; $neurosoc$;"
+                )
+                cur.execute(
+                    "DO $neurosoc$ BEGIN IF NOT EXISTS ("
+                    "SELECT 1 FROM pg_trigger WHERE tgname = 'neurosoc_audit_no_truncate' "
+                    "AND tgrelid = 'security_audit_events'::regclass AND NOT tgisinternal"
+                    ") THEN CREATE TRIGGER neurosoc_audit_no_truncate "
+                    "BEFORE TRUNCATE ON security_audit_events "
+                    "FOR EACH STATEMENT EXECUTE FUNCTION neurosoc_reject_audit_mutation(); "
+                    "END IF; END; $neurosoc$;"
+                )
                 cur.execute("DROP INDEX IF EXISTS idx_alert_decisions_session")
                 cur.execute(
                     "CREATE INDEX IF NOT EXISTS idx_verdicts_tenant_created ON verdicts (tenant_id, created_at DESC, id DESC)"
@@ -1394,34 +1469,101 @@ class VerdictRepository:
         conn.close()
 
     def record_audit_event(self, event: dict[str, Any]) -> None:
-        conn = self._connect(event.get("tenant_id"))
+        chain_id = str(event.get("tenant_id") or "__unassigned__")
+        stored_event = {**event, "tenant_id": chain_id}
+        conn = self._connect(chain_id)
         if conn is None:
-            log.info("security_audit %s", json.dumps(event, sort_keys=True, separators=(",", ":")))
+            log.info("security_audit %s", json.dumps(stored_event, sort_keys=True, separators=(",", ":")))
             return
         try:
             with conn:
                 with conn.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (chain_id,))
+                    cur.execute(
+                        "SELECT chain_sequence, event_hash FROM security_audit_events "
+                        "WHERE chain_id = %s AND chain_sequence IS NOT NULL "
+                        "ORDER BY chain_sequence DESC LIMIT 1",
+                        (chain_id,),
+                    )
+                    previous = cur.fetchone() or {}
+                    previous_hash = str(previous.get("event_hash") or GENESIS_HASH)
+                    chain_sequence = int(previous.get("chain_sequence") or 0) + 1
+                    created_at = datetime.now(timezone.utc)
+                    chained_event = {
+                        **stored_event,
+                        "chain_id": chain_id,
+                        "chain_sequence": chain_sequence,
+                        "previous_hash": previous_hash,
+                        "created_at": created_at,
+                    }
+                    event_hash = audit_event_hash(previous_hash, chained_event)
                     cur.execute(
                         """
                         INSERT INTO security_audit_events (
-                            event_id, tenant_id, event_type, outcome, actor_id, actor_roles,
-                            http_method, route, source_ip, resource_id, details
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            event_id, tenant_id, chain_id, chain_sequence, previous_hash, event_hash,
+                            event_type, outcome, actor_id, actor_roles, http_method, route,
+                            source_ip, resource_id, details, created_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
-                            event["event_id"],
-                            event.get("tenant_id"),
-                            event["event_type"],
-                            event["outcome"],
-                            event.get("actor_id"),
-                            Json(event.get("actor_roles", [])),
-                            event.get("http_method"),
-                            event["route"],
-                            event.get("source_ip"),
-                            event.get("resource_id"),
-                            Json(event.get("details", {})),
+                            stored_event["event_id"],
+                            chain_id,
+                            chain_id,
+                            chain_sequence,
+                            previous_hash,
+                            event_hash,
+                            stored_event["event_type"],
+                            stored_event["outcome"],
+                            stored_event.get("actor_id"),
+                            Json(stored_event.get("actor_roles", [])),
+                            stored_event.get("http_method"),
+                            stored_event["route"],
+                            stored_event.get("source_ip"),
+                            stored_event.get("resource_id"),
+                            Json(stored_event.get("details", {})),
+                            created_at,
                         ),
                     )
+        finally:
+            conn.close()
+
+    def list_audit_events(
+        self,
+        tenant_id: str,
+        after_sequence: int,
+        limit: int,
+    ) -> tuple[str, list[dict[str, Any]]] | None:
+        conn = self._connect(tenant_id)
+        if conn is None:
+            return None
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    anchor_hash = GENESIS_HASH
+                    if after_sequence > 0:
+                        cur.execute(
+                            "SELECT event_hash FROM security_audit_events "
+                            "WHERE tenant_id = %s AND chain_sequence = %s",
+                            (tenant_id, after_sequence),
+                        )
+                        anchor = cur.fetchone()
+                        if anchor is None:
+                            return None
+                        anchor_hash = str(anchor["event_hash"])
+                    cur.execute(
+                        """
+                        SELECT event_id, tenant_id, chain_id, chain_sequence, previous_hash, event_hash,
+                               event_type, outcome, actor_id, actor_roles, http_method, route,
+                               source_ip, resource_id, details, created_at
+                        FROM security_audit_events
+                        WHERE tenant_id = %s AND chain_sequence > %s
+                        ORDER BY chain_sequence ASC
+                        LIMIT %s
+                        """,
+                        (tenant_id, after_sequence, limit + 1),
+                    )
+                    rows = [dict(row) for row in cur.fetchall()]
+            return anchor_hash, rows
         finally:
             conn.close()
 
@@ -3408,6 +3550,44 @@ def get_latest_alerts(request: Request, limit: int = Query(default=20, ge=1, le=
     tenant_id = _request_tenant_id(request)
     items = runtime.latest_alerts(tenant_id, limit)
     return {"count": len(items), "items": items}
+
+
+@app.get("/api/v1/audit/events", response_model=AuditEventsExportResponse)
+def export_audit_events(
+    request: Request,
+    after_sequence: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    tenant_id = _request_tenant_id(request)
+    page = runtime.repository.list_audit_events(tenant_id, after_sequence, limit)
+    if page is None:
+        if not DATABASE_URL:
+            return _audit_unavailable_response()
+        raise HTTPException(status_code=400, detail="Audit sequence cursor was not found for this tenant.")
+
+    anchor_hash, rows = page
+    events = rows[:limit]
+    previous_hash = anchor_hash
+    for event in events:
+        if not verify_audit_event(previous_hash, event):
+            log.error(
+                "Audit chain verification failed for tenant %s at sequence %s",
+                tenant_id,
+                event.get("chain_sequence"),
+            )
+            raise HTTPException(status_code=503, detail="Audit chain integrity verification failed.")
+        previous_hash = str(event["event_hash"])
+
+    next_sequence = int(events[-1]["chain_sequence"]) if events else after_sequence
+    return {
+        "tenant_id": tenant_id,
+        "events": events,
+        "after_sequence": after_sequence,
+        "next_sequence": next_sequence,
+        "chain_anchor_hash": anchor_hash,
+        "chain_valid": True,
+        "has_more": len(rows) > limit,
+    }
 
 
 # --- Analyst API (Frontend Compatibility) ---

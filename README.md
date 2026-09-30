@@ -454,6 +454,7 @@ OIDC_REQUIRED=true
 - PostgreSQL verdict, alert, decision, audit, training-label, and behavioral-profile storage is tenant-scoped with application filters and row-level security. Existing rows without verified ownership stay unassigned and are hidden from tenant queries.
 - Shared-mode tenant isolation still needs a production database migration/backup rehearsal, production IdP and claim-mapping verification, source-network isolation, and an explicit policy for cross-tenant model training. Do not treat local tests as a production certification.
 - With PostgreSQL configured, authentication, alert, response-action and model-change events are written to `security_audit_events`.
+- Audit events are tenant-scoped, appended to a SHA-256 hash chain, and exportable by tenant admins/auditors from `GET /api/v1/audit/events?after_sequence=0`. The endpoint verifies each returned page; external immutable anchoring and retention policy are still required to protect against a database administrator rewriting both rows and chain state.
 - Change the example passwords in `identity/realm-export.json` before using a shared environment.
 
 </details>
@@ -526,7 +527,8 @@ Project_NeuroSOC/
 - [x] Analyst alert decisions, model candidate approval/promotion/rollback, and dashboard bearer-token wiring
 - [x] Per-alert feature explanations and Prometheus/Grafana overview
 - [x] Cross-replica API rate limits through Redis atomic counters; shared inference startup requires authenticated TLS Redis and fails closed on outage
-- [~] OIDC, event, alert, profile, and database query isolation carry tenant scope; production IdP validation, source provisioning, cross-tenant model-training policy, tamper-evident audit export, and retention policies remain
+- [x] Tenant-scoped append-only audit hash chains with paginated admin/auditor export and per-page integrity checks
+- [~] OIDC, event, alert, profile, audit, rate-limit, and database query isolation carry tenant scope; production IdP lifecycle, per-source broker identity/ACL verification, cross-tenant model-training policy, external audit anchoring, retention policy, and restore rehearsal remain
 - [ ] Approved production dataset, model drift/fairness/adversarial evaluation, and reproducible training
 - [ ] SIEM/EDR/ticketing connectors, incident runbooks, backup/restore drills, and load/security rehearsal
 

@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "inference-service"
 
 import main as inference_main
 from core.auth import OIDCConfig, OIDCValidationError
+from core.audit_chain import GENESIS_HASH, audit_event_hash
 
 
 @pytest.fixture
@@ -227,6 +228,70 @@ def test_local_rate_limiter_falls_back_to_process_window_when_redis_is_unavailab
     limiter = inference_main.FixedWindowRateLimiter(1, redis_client=OfflineRedis())
     assert limiter.check("127.0.0.1", now=100.0) is None
     assert limiter.check("127.0.0.1", now=101.0) == 59
+
+
+def _make_audit_export_row(tenant_id, sequence=1, previous_hash=GENESIS_HASH):
+    from datetime import datetime, timezone
+
+    event = {
+        "event_id": f"audit-{tenant_id}-{sequence}",
+        "tenant_id": tenant_id,
+        "event_type": "security.authentication",
+        "outcome": "succeeded",
+        "actor_id": "auditor-1",
+        "actor_roles": ["auditor"],
+        "http_method": "GET",
+        "route": "/api/v1/alerts",
+        "source_ip": "192.0.2.12",
+        "resource_id": None,
+        "details": {"method": "oidc_bearer"},
+        "chain_id": tenant_id,
+        "chain_sequence": sequence,
+        "created_at": datetime(2026, 9, 30, 12, 0, sequence, tzinfo=timezone.utc),
+    }
+    event_hash = audit_event_hash(previous_hash, event)
+    return {**event, "previous_hash": previous_hash, "event_hash": event_hash}
+
+
+def test_audit_export_is_limited_to_auditor_roles_and_request_tenant(protected_client, monkeypatch):
+    requested = []
+
+    def list_events(tenant_id, after_sequence, limit):
+        requested.append((tenant_id, after_sequence, limit))
+        return GENESIS_HASH, [_make_audit_export_row(tenant_id)]
+
+    monkeypatch.setattr(inference_main.runtime.repository, "list_audit_events", list_events)
+    denied = protected_client.get(
+        "/api/v1/audit/events", headers={"Authorization": "Bearer analyst@tenant-a"}
+    )
+    assert denied.status_code == 403
+    assert requested == []
+
+    exported = protected_client.get(
+        "/api/v1/audit/events?limit=25",
+        headers={"Authorization": "Bearer auditor@tenant-a"},
+    )
+    assert exported.status_code == 200
+    assert exported.json()["tenant_id"] == "tenant-a"
+    assert exported.json()["events"][0]["event_hash"]
+    assert exported.json()["chain_valid"] is True
+    assert requested == [("tenant-a", 0, 25)]
+
+
+def test_audit_export_rejects_modified_chain_events(protected_client, monkeypatch):
+    event = _make_audit_export_row("tenant-a")
+    event["outcome"] = "denied"
+    monkeypatch.setattr(
+        inference_main.runtime.repository,
+        "list_audit_events",
+        lambda *_args: (GENESIS_HASH, [event]),
+    )
+
+    response = protected_client.get(
+        "/api/v1/audit/events", headers={"Authorization": "Bearer auditor@tenant-a"}
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Audit chain integrity verification failed."
 
 
 def test_cors_preflight_reaches_cors_middleware_without_bearer_token(protected_client):
@@ -706,6 +771,9 @@ def test_audit_repository_uses_parameterized_database_insert(monkeypatch):
         def execute(self, query, parameters):
             calls.append((query, parameters))
 
+        def fetchone(self):
+            return None
+
     class FakeConnection:
         closed = False
 
@@ -737,8 +805,9 @@ def test_audit_repository_uses_parameterized_database_insert(monkeypatch):
 
     repository.record_audit_event(event)
 
-    assert len(calls) == 1
-    query, parameters = calls[0]
+    assert len(calls) == 3
+    assert "pg_advisory_xact_lock" in calls[0][0]
+    query, parameters = calls[-1]
     assert "INSERT INTO security_audit_events" in query
     assert event["event_id"] in parameters
     assert "user-123" in parameters

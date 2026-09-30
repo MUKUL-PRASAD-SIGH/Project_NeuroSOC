@@ -126,3 +126,7 @@ def test_shared_database_bootstrap_enables_forced_row_policies(monkeypatch):
         assert f"CREATE POLICY tenant_isolation ON {table}" in sql
     assert "idx_training_tenant_session" in sql
     assert "DROP CONSTRAINT IF EXISTS labeled_training_data_session_id_key" in sql
+    assert "idx_security_audit_chain_sequence" in sql
+    assert "idx_security_audit_tenant_sequence" in sql
+    assert "security_audit_events is append-only" in sql
+    assert "neurosoc_audit_no_truncate" in sql

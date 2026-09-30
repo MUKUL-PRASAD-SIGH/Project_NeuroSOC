@@ -119,6 +119,8 @@ def canonical_route_path(path: str) -> str:
 def required_roles_for_route(path: str, method: str) -> frozenset[str]:
     path = canonical_route_path(path)
     method = method.upper()
+    if path == "/api/audit/events":
+        return frozenset({"admin", "auditor", "platform-admin"})
     admin_prefixes = ("/admin", "/api/admin")
     if any(path == prefix or path.startswith(prefix + "/") for prefix in admin_prefixes):
         return MODEL_ADMIN_ROLES
