@@ -1,6 +1,8 @@
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { BackgroundVideo, Cards, Faq, Hero, LandingFooter, LandingHeader, SecurityExplainer, Services } from './LandingSections';
+
+const FluidGlass = lazy(() => import('../components/FluidGlass'));
 
 // Honeypot canary: exposed as a fake CSRF token so scrapers that harvest it can be traced.
 const CANARY_TOKEN = 'NT_CANARY_7f8e9d2a1b3c4e5f6g7h8i9j0k';
@@ -29,6 +31,15 @@ export default function Landing() {
       <Hero />
       <Services />
       <Cards />
+      <section className="mx-auto max-w-6xl px-6 py-20">
+        <p className="text-sm text-white/60">Look closer</p>
+        <h2 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">Clear view of every payment</h2>
+        <div className="mt-8 h-[560px] overflow-hidden rounded-3xl border border-white/10">
+          <Suspense fallback={null}>
+            <FluidGlass mode="lens" lensProps={{ scale: 0.25, ior: 1.15, thickness: 5, chromaticAberration: 0.1, anisotropy: 0.01 }} />
+          </Suspense>
+        </div>
+      </section>
       <SecurityExplainer />
       <Faq />
       <LandingFooter />

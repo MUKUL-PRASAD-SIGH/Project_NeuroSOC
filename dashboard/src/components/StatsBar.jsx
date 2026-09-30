@@ -9,7 +9,7 @@ function StatCard({ label, value, hint, accent }) {
         <span className={`h-1.5 w-1.5 rounded-full ${accent}`} />
         <p className="text-xs font-medium text-soc-muted">{label}</p>
       </div>
-      <p className="soc-tabular mt-3 text-[28px] font-semibold leading-none tracking-tight text-soc-text">{value}</p>
+      <p className="soc-tabular mt-3 text-[28px] font-medium leading-none tracking-tight text-soc-text">{value}</p>
       <p className="mt-2 text-xs text-soc-muted">{hint}</p>
     </article>
   );

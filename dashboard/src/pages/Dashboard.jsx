@@ -5,7 +5,7 @@ import IngestionWorkbench from "../components/IngestionWorkbench";
 import ModelCandidatesPanel from "../components/ModelCandidatesPanel";
 import ModelStatusCard from "../components/ModelStatusCard";
 import PageTabs from "../components/PageTabs";
-import StatsBar from "../components/StatsBar";
+import { Hero, WhyNow, Workspace } from "../components/OverviewHero";
 import ThreatMap from "../components/ThreatMap";
 import UserProfileModal from "../components/UserProfileModal";
 import VerdictTimeline from "../components/Charts/VerdictTimeline";
@@ -21,8 +21,8 @@ export default function DashboardPage() {
   const tabs = [
     { key: "overview", label: "Activity" },
     { key: "threat-map", label: "Threat map" },
-    { key: "model-health", label: MODEL_INTEGRATION_ENABLED ? "Model health" : "Model integration" },
-    ...(import.meta.env.DEV ? [{ key: "pipeline", label: "Pipeline" }] : []),
+    ...(MODEL_INTEGRATION_ENABLED ? [{ key: "model-health", label: "Model health" }] : []),
+    { key: "pipeline", label: "Pipeline" },
   ];
   const requestedTab = searchParams.get("view");
   const activeTab = tabs.some((tab) => tab.key === requestedTab) ? requestedTab : "overview";
@@ -42,7 +42,11 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-5">
-      <header>
+      {activeTab === "overview" ? (
+        <Hero onOpenAlerts={() => document.getElementById("alert-feed")?.scrollIntoView({ behavior: "smooth" })} />
+      ) : null}
+
+      <header className={activeTab === "overview" ? "hidden" : ""}>
         <div>
           <p className="soc-kicker">Overview</p>
           <h1 className="soc-title mt-1">Security operations</h1>
@@ -67,8 +71,9 @@ export default function DashboardPage() {
       <section id="overview-panel" role="tabpanel" aria-labelledby={`overview-tab-${activeTab}`} tabIndex={0} className="space-y-5 focus:outline-none">
         {activeTab === "overview" ? (
           <>
-            <StatsBar />
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_400px]">
+            <WhyNow />
+            <Workspace />
+            <div id="alert-feed" className="grid scroll-mt-24 grid-cols-1 gap-4 pt-10 xl:grid-cols-[minmax(0,1fr)_400px]">
               <VerdictTimeline data={timelineData} />
               <AlertFeed />
             </div>
@@ -77,14 +82,14 @@ export default function DashboardPage() {
 
         {activeTab === "threat-map" ? <ThreatMap compact={false} /> : null}
 
-        {activeTab === "model-health" ? (
+        {activeTab === "model-health" && MODEL_INTEGRATION_ENABLED ? (
           <div className="max-w-3xl">
             <ModelStatusCard />
             <ModelCandidatesPanel />
           </div>
         ) : null}
 
-        {activeTab === "pipeline" && import.meta.env.DEV ? <IngestionWorkbench /> : null}
+        {activeTab === "pipeline" ? <IngestionWorkbench /> : null}
       </section>
 
       <UserProfileModal />

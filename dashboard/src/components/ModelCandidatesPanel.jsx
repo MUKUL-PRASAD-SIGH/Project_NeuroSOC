@@ -65,7 +65,7 @@ export default function ModelCandidatesPanel() {
             type="button"
             disabled={busyId !== null}
             onClick={() => runAction("rollback", rollbackActiveModel)}
-            className="rounded-md border border-soc-amber/50 px-3 py-1.5 text-xs font-medium text-soc-amber transition hover:bg-soc-amber/10 disabled:opacity-50"
+            className="rounded-xl border border-soc-amber/50 px-3 py-1.5 text-xs font-medium text-soc-amber transition hover:bg-soc-amber/10 disabled:opacity-50"
           >
             {busyId === "rollback" ? "Rolling back…" : "Rollback to previous"}
           </button>
@@ -79,14 +79,14 @@ export default function ModelCandidatesPanel() {
         {loading && items.length === 0 ? (
           <p className="text-sm text-soc-muted">Loading candidates…</p>
         ) : pending.length === 0 ? (
-          <p className="rounded-md border border-dashed border-soc-border p-4 text-center text-sm text-soc-muted">
+          <p className="rounded-xl border border-dashed border-soc-border p-4 text-center text-sm text-soc-muted">
             No candidates pending approval.
           </p>
         ) : (
           pending.map((candidate) => (
             <article
               key={candidate.candidateId}
-              className="rounded-md border border-soc-border/80 bg-soc-panelSoft/50 p-3.5"
+              className="rounded-xl border border-soc-border/80 bg-soc-panelSoft/50 p-3.5"
             >
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
@@ -98,7 +98,7 @@ export default function ModelCandidatesPanel() {
                   </p>
                 </div>
                 <span
-                  className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.1em] ${
+                  className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.1em] ${
                     statusTone[candidate.status] || statusTone.pending_approval
                   }`}
                 >
@@ -111,7 +111,7 @@ export default function ModelCandidatesPanel() {
                     type="button"
                     disabled={busyId !== null}
                     onClick={() => runAction(candidate.candidateId, () => promoteCandidate(candidate.candidateId))}
-                    className="rounded-md border border-soc-green/50 px-3 py-1.5 text-xs font-medium text-soc-green transition hover:bg-soc-green/10 disabled:opacity-50"
+                    className="rounded-xl border border-soc-green/50 px-3 py-1.5 text-xs font-medium text-soc-green transition hover:bg-soc-green/10 disabled:opacity-50"
                   >
                     {busyId === candidate.candidateId ? "Working…" : "Promote"}
                   </button>
@@ -119,7 +119,7 @@ export default function ModelCandidatesPanel() {
                     type="button"
                     disabled={busyId !== null}
                     onClick={() => runAction(candidate.candidateId, () => rejectCandidate(candidate.candidateId))}
-                    className="rounded-md border border-soc-border/70 px-3 py-1.5 text-xs font-medium text-soc-muted transition hover:bg-soc-panelSoft disabled:opacity-50"
+                    className="rounded-xl border border-soc-border/70 px-3 py-1.5 text-xs font-medium text-soc-muted transition hover:bg-soc-panelSoft disabled:opacity-50"
                   >
                     Reject
                   </button>
