@@ -141,6 +141,9 @@ export function Hero() {
             <a href="#security" className="text-white/60 underline-offset-4 hover:text-white hover:underline">
               How protection works
             </a>
+            <Link to="/system-flow" className="text-white/60 underline-offset-4 hover:text-white hover:underline">
+              How protection works
+            </Link>
           </div>
         </div>
 
