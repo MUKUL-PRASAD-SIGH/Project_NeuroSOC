@@ -79,8 +79,25 @@ jobs:
         with:
           context: ./${{ matrix.service }}
           push: false
+          load: true
+          tags: neurosoc/${{ matrix.service }}:ci
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+      - name: Generate image SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: neurosoc/${{ matrix.service }}:ci
+          format: spdx-json
+          output-file: ./sbom-${{ matrix.service }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Upload image SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: neurosoc-${{ matrix.service }}-sbom
+          path: ./sbom-${{ matrix.service }}.spdx.json
+          if-no-files-found: error
+          retention-days: 30
 
   compose-config:
     runs-on: ubuntu-latest
