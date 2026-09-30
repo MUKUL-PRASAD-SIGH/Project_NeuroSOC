@@ -1,5 +1,7 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { motion } from 'motion/react';
+import ProfileCard from '../components/ProfileCard';
 import { clearPortalSession, readPortalSession, setDebugToken } from '../../lib/portalSession';
 import { useBehavioralTracker } from '../../hooks/useBehavioralTracker';
 import { getMockDashboardData } from '../../lib/portalMock';
@@ -52,6 +54,15 @@ function useCountUp(target: number, durationMs = 1400) {
   return value;
 }
 
+const rise = {
+  hidden: { opacity: 0, y: 14 },
+  show: (index: number) => ({
+    opacity: 1,
+    y: 0,
+    transition: { delay: 0.12 + index * 0.08, duration: 0.5, ease: [0.16, 1, 0.3, 1] as const },
+  }),
+};
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const session = readPortalSession();
@@ -62,7 +73,10 @@ export default function Dashboard() {
   });
   const dashboardData = getMockDashboardData(session.userId || session.email);
   const displayName = session.displayName || dashboardData.displayName;
-  const balance = session.account?.balance ?? dashboardData.account.balance;
+  const recentTransfers = session.recentTransfers || [];
+  const sentTotal = recentTransfers.reduce((sum, transfer) => sum + transfer.amount, 0);
+  const balance = (session.account?.balance ?? dashboardData.account.balance) - sentTotal;
+  const animatedBalance = useCountUp(balance);
   const accountMasked = session.account?.accountMasked || dashboardData.account.accountMasked;
   const transactions = [
     ...recentTransfers.map((transfer) => ({
@@ -191,8 +205,9 @@ export default function Dashboard() {
           </motion.div>
         </div>
 
+        <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_340px] lg:items-start">
         <motion.section
-          className="mt-5 rounded-3xl border border-white/10 bg-white/[0.04]"
+          className="rounded-3xl border border-white/10 bg-white/[0.04]"
           variants={rise}
           initial="hidden"
           animate="show"
@@ -233,6 +248,19 @@ export default function Dashboard() {
             })}
           </div>
         </motion.section>
+        <motion.div className="mx-auto w-full max-w-[340px]" variants={rise} initial="hidden" animate="show" custom={4}>
+          <ProfileCard
+            avatarUrl={`${import.meta.env.BASE_URL}logo.png`}
+            name={displayName}
+            title="Checking account"
+            handle={accountMasked}
+            status="Protected"
+            contactText="Support"
+            innerGradient="linear-gradient(145deg,#ff8a1f55 0%,#ff4d2e22 100%)"
+            behindGlowColor="rgba(255,110,40,.55)"
+          />
+        </motion.div>
+        </div>
       </main>
     </div>
   );

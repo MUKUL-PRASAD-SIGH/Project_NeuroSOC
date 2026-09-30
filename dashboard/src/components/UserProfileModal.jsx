@@ -47,10 +47,10 @@ function DecisionPanel({ alert }) {
   }
 
   return (
-    <section className="mt-5 rounded-lg border border-soc-border/80 bg-soc-panelSoft/40 p-4">
+    <section className="mt-5 rounded-2xl border border-soc-border/80 bg-soc-panelSoft/40 p-4">
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs font-medium text-soc-muted">Analyst decision</p>
-        <span className="rounded-full border border-soc-border/60 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-soc-muted">
+        <span className="rounded-full border border-soc-border/60 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.14em] text-soc-muted">
           {statusLabel[alert.status] || "Awaiting review"}
         </span>
       </div>
@@ -67,7 +67,7 @@ function DecisionPanel({ alert }) {
               type="button"
               disabled={pending !== null}
               onClick={() => handleDecision(option.value)}
-              className={`rounded-md border px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 ${option.tone}`}
+              className={`rounded-xl border px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 ${option.tone}`}
             >
               {pending === option.value ? "Saving…" : option.label}
             </button>
@@ -157,14 +157,14 @@ function ModelBreakdown({ raw }) {
       {rows.map((row) => (
         <div
           key={row.label}
-          className="flex items-center justify-between rounded-md border border-soc-border/60 bg-soc-panel/50 px-3 py-2"
+          className="flex items-center justify-between rounded-xl border border-soc-border/60 bg-soc-panel/50 px-3 py-2"
         >
           <div>
-            <p className="text-xs font-semibold text-soc-text">{row.label}</p>
+            <p className="text-xs font-medium text-soc-text">{row.label}</p>
             <p className="text-[11px] text-soc-muted">{row.note}</p>
           </div>
           <span
-            className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+            className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${
               row.bad
                 ? "bg-soc-red/15 text-soc-red"
                 : "bg-soc-green/15 text-soc-green"
@@ -193,7 +193,7 @@ function TopFeatures({ explanation }) {
       <div className="mt-2 space-y-1.5">
         {features.map((item) => (
           <div key={item.feature} className="flex items-center gap-2 text-xs">
-            <span className="w-28 shrink-0 truncate font-mono text-[11px] text-soc-text" title={item.feature}>
+            <span className="w-28 shrink-0 truncate  text-[11px] text-soc-text" title={item.feature}>
               {item.feature}
             </span>
             <div className="h-1.5 flex-1 rounded-full bg-soc-panelSoft">
@@ -202,7 +202,7 @@ function TopFeatures({ explanation }) {
                 style={{ width: `${Math.max((Math.abs(item.impact) / maxAbsImpact) * 100, 4)}%` }}
               />
             </div>
-            <span className="soc-tabular w-14 shrink-0 text-right font-mono text-[11px] text-soc-muted">
+            <span className="soc-tabular w-14 shrink-0 text-right  text-[11px] text-soc-muted">
               {item.value.toFixed(2)}
             </span>
           </div>
@@ -219,10 +219,10 @@ function VerdictHistory({ recentVerdicts }) {
       {recentVerdicts.map((item, i) => (
         <div
           key={item.id || i}
-          className="flex items-center justify-between rounded-md border border-soc-border/60 bg-soc-panel/50 px-3 py-2"
+          className="flex items-center justify-between rounded-xl border border-soc-border/60 bg-soc-panel/50 px-3 py-2"
         >
           <div className="flex items-center gap-2">
-            <span className={`text-sm font-semibold ${verdictTone[item.verdict] || "text-soc-muted"}`}>
+            <span className={`text-sm font-medium ${verdictTone[item.verdict] || "text-soc-muted"}`}>
               {item.verdict?.replace(/_/g, " ") || "UNKNOWN"}
             </span>
             <span className="text-[11px] text-soc-muted">
@@ -291,11 +291,11 @@ function SandboxActivity({ sessionId }) {
   const actions = replay?.actions || [];
 
   return (
-    <section className="mt-5 rounded-lg border border-soc-red/30 bg-soc-red/5 p-4">
+    <section className="mt-5 rounded-2xl border border-soc-red/30 bg-soc-red/5 p-4">
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs font-medium text-soc-muted">Sandbox activity</p>
         {replay?.sandbox_token ? (
-          <span className="font-mono text-[11px] text-soc-muted">{replay.sandbox_token}</span>
+          <span className=" text-[11px] text-soc-muted">{replay.sandbox_token}</span>
         ) : null}
       </div>
       <p className="mt-1 text-xs text-soc-muted">Everything this session did inside the decoy environment.</p>
@@ -351,7 +351,7 @@ export default function UserProfileModal() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="soc-kicker">Session Analysis</p>
-            <h2 className="mt-2 text-2xl font-semibold text-soc-text">
+            <h2 className="mt-2 text-2xl font-medium text-soc-text">
               {alert.userName || alert.userId || alert.sourceIp}
             </h2>
             <p className="mt-1 text-sm text-soc-muted">
@@ -362,14 +362,14 @@ export default function UserProfileModal() {
             <button
               type="button"
               onClick={() => setShowRaw((v) => !v)}
-              className="rounded-full border border-soc-border/60 bg-soc-panelSoft/40 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-soc-muted transition hover:border-soc-electric/40 hover:text-soc-text"
+              className="rounded-full border border-soc-border/60 bg-soc-panelSoft/40 px-3 py-2 text-xs font-medium uppercase tracking-[0.18em] text-soc-muted transition hover:border-soc-electric/40 hover:text-soc-text"
             >
               {showRaw ? "Summary" : "JSON"}
             </button>
             <button
               type="button"
               onClick={closeUserModal}
-              className="rounded-full border border-soc-border/80 bg-soc-panelSoft/60 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-soc-muted transition hover:border-soc-electric/40 hover:text-soc-text"
+              className="rounded-full border border-soc-border/80 bg-soc-panelSoft/60 px-3 py-2 text-xs font-medium uppercase tracking-[0.18em] text-soc-muted transition hover:border-soc-electric/40 hover:text-soc-text"
             >
               Close
             </button>
@@ -378,23 +378,23 @@ export default function UserProfileModal() {
 
         {/* JSON mode */}
         {showRaw ? (
-          <pre className="mt-5 max-h-[60vh] overflow-auto rounded-md border border-soc-border/60 bg-soc-panel/80 p-4 text-[11px] leading-relaxed text-soc-muted">
+          <pre className="mt-5 max-h-[60vh] overflow-auto rounded-xl border border-soc-border/60 bg-soc-panel/80 p-4 text-[11px] leading-relaxed text-soc-muted">
             {JSON.stringify(alert, null, 2)}
           </pre>
         ) : (
           <>
             {/* Verdict summary banner */}
-            <div className="mt-5 rounded-md border border-soc-border/60 bg-soc-panelSoft/40 p-4">
+            <div className="mt-5 rounded-xl border border-soc-border/60 bg-soc-panelSoft/40 p-4">
               <div className="flex items-center gap-3">
                 <span
-                  className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${
+                  className={`rounded-full border px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em] ${
                     verdictBadge[verdict] || verdictBadge.INCONCLUSIVE
                   }`}
                 >
                   {verdictHeadline[verdict] || verdict.replace(/_/g, " ")}
                 </span>
                 <span className="text-sm text-soc-muted">
-                  Risk score: <span className="font-semibold text-soc-text">{Math.round((alert.score || 0) * 100)}%</span>
+                  Risk score: <span className="font-medium text-soc-text">{Math.round((alert.score || 0) * 100)}%</span>
                 </span>
                 {alert.modelVersion && (
                   <span className="text-xs text-soc-muted">Model: {alert.modelVersion}</span>
@@ -406,7 +406,7 @@ export default function UserProfileModal() {
             <div className="mt-5 grid gap-5 xl:grid-cols-[1.25fr_0.95fr]">
 
               {/* Left — radar + model breakdown */}
-              <section className="rounded-lg border border-soc-border/80 bg-soc-panelSoft/40 p-4">
+              <section className="rounded-2xl border border-soc-border/80 bg-soc-panelSoft/40 p-4">
                 <p className="text-xs font-medium text-soc-muted">
                   {DEMO_DATA_ENABLED ? "Illustrative Signal Profile" : "Behavioural Signal Radar"}
                 </p>
@@ -419,12 +419,12 @@ export default function UserProfileModal() {
                   <ResponsiveContainer width="100%" height="100%">
                     <RadarChart data={alert.dimensions}>
                       <PolarGrid stroke="rgba(94, 120, 163, 0.2)" />
-                      <PolarAngleAxis dataKey="subject" tick={{ fill: "#8ea2c9", fontSize: 10 }} />
+                      <PolarAngleAxis dataKey="subject" tick={{ fill: "#8a93a8", fontSize: 10 }} />
                       <Radar
                         name="Behavior"
                         dataKey="value"
-                        stroke="#19e6ff"
-                        fill="#19e6ff"
+                        stroke="#5b93ff"
+                        fill="#5b93ff"
                         fillOpacity={0.3}
                       />
                     </RadarChart>
@@ -443,7 +443,7 @@ export default function UserProfileModal() {
               </section>
 
               {/* Right — verdict history */}
-              <section className="rounded-lg border border-soc-border/80 bg-soc-panelSoft/40 p-4">
+              <section className="rounded-2xl border border-soc-border/80 bg-soc-panelSoft/40 p-4">
                 <p className="text-xs font-medium text-soc-muted">
                   Recent Session History
                 </p>

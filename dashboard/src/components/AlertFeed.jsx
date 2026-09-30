@@ -58,7 +58,7 @@ function AlertCard({ alert, onOpen }) {
 
   return (
     <div
-      className={`rounded-md border border-l-[3px] border-soc-border/80 bg-soc-panelSoft/50 p-3.5 transition-colors hover:bg-soc-panelSoft ${
+      className={`soc-enter rounded-xl border border-l-[3px] border-soc-border/80 bg-soc-panelSoft/50 p-3.5 transition-colors hover:bg-soc-panelSoft ${
         verdictRail[verdict] || verdictRail.INCONCLUSIVE
       }`}
     >
@@ -78,11 +78,11 @@ function AlertCard({ alert, onOpen }) {
             </span>
           ) : null}
         </div>
-        <span className="soc-tabular shrink-0 font-mono text-[11px] text-soc-muted">{formatAlertTime(alert.timestamp)}</span>
+        <span className="soc-tabular shrink-0  text-[11px] text-soc-muted">{formatAlertTime(alert.timestamp)}</span>
       </div>
 
       {showRaw ? (
-        <pre className="mt-2 max-h-48 overflow-auto rounded bg-soc-bg p-3 font-mono text-[11px] leading-relaxed text-soc-muted">
+        <pre className="mt-2 max-h-48 overflow-auto rounded bg-soc-bg p-3  text-[11px] leading-relaxed text-soc-muted">
           {JSON.stringify(alert, null, 2)}
         </pre>
       ) : (
@@ -97,7 +97,7 @@ function AlertCard({ alert, onOpen }) {
               style={{ width: `${Math.min(Math.max(risk, 2), 100)}%` }}
             />
           </div>
-          <span className="soc-tabular w-16 text-right font-mono text-[11px] text-soc-muted">risk {risk}%</span>
+          <span className="soc-tabular w-16 text-right  text-[11px] text-soc-muted">risk {risk}%</span>
         </div>
         <div className="flex gap-1.5">
           <button type="button" onClick={() => setShowRaw((v) => !v)} className="soc-btn px-2 py-1 text-[11px]">
@@ -148,9 +148,9 @@ export default function AlertFeed({ maxItems = null, showHeader = true, items: a
 
       <div className="max-h-[520px] flex-1 space-y-2 overflow-y-auto pr-1">
         {loading && sortedAlerts.length === 0 &&
-          [0, 1, 2].map((i) => <div key={i} className="h-[104px] animate-pulse rounded-md bg-soc-panelSoft/60" />)}
+          [0, 1, 2].map((i) => <div key={i} className="h-[104px] animate-pulse rounded-xl bg-soc-panelSoft/60" />)}
         {!loading && sortedAlerts.length === 0 && (
-          <div className="rounded-md border border-dashed border-soc-border p-6 text-center text-sm text-soc-muted">
+          <div className="rounded-xl border border-dashed border-soc-border p-6 text-center text-sm text-soc-muted">
             No alerts yet. New verdicts will appear here as they arrive.
           </div>
         )}
