@@ -1,4 +1,5 @@
 import { useDashboardStore } from "../store/dashboardStore";
+import { MODEL_INTEGRATION_ENABLED } from "../lib/featureFlags";
 
 export default function ModelStatusCard() {
   const modelStatus = useDashboardStore((state) => state.modelStatus);
@@ -9,16 +10,51 @@ export default function ModelStatusCard() {
     (entry) => entry?.value !== null && entry?.value !== undefined && Number.isFinite(Number(entry.value)),
   );
 
+  if (!MODEL_INTEGRATION_ENABLED) {
+    return (
+      <section className="soc-glass p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="soc-kicker">Model handoff</p>
+            <h2 className="soc-section-title mt-1">Colab model integration</h2>
+            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-soc-muted">
+              Model training and evaluation are being completed in Colab. This dashboard is ready to show the verified artifact and serving signals when that integration is connected.
+            </p>
+          </div>
+          <span className="shrink-0 rounded-full border border-soc-amber/40 bg-soc-amber/10 px-3 py-1 text-[11px] font-medium text-soc-amber">
+            Placeholder
+          </span>
+        </div>
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+          {[
+            ["Model artifact", "Awaiting Colab handoff"],
+            ["Evaluation report", "Awaiting verified metrics"],
+            ["Inference service", "Awaiting integration"],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-md border border-soc-border/80 bg-soc-panelSoft/50 p-3.5">
+              <p className="text-xs text-soc-muted">{label}</p>
+              <p className="mt-2 text-sm font-medium text-soc-text">{value}</p>
+            </div>
+          ))}
+        </div>
+        <p className="mt-4 text-[11px] text-soc-muted">
+          Planned signals: model version · per-class evaluation · inference latency · drift
+        </p>
+      </section>
+    );
+  }
+
   return (
     <section className="soc-glass flex flex-col p-5">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="soc-section-title">Model</h2>
-          <p className="mt-0.5 text-xs text-soc-muted">Active inference ensemble</p>
+          <p className="mt-0.5 text-xs text-soc-muted">Reported runtime metadata</p>
         </div>
         <span className="inline-flex items-center gap-1.5 text-xs text-soc-muted">
-          <span className={`h-1.5 w-1.5 rounded-full ${error ? "bg-soc-red" : loading ? "bg-soc-amber" : "bg-soc-green"}`} />
-          {error ? "Unavailable" : loading ? "Syncing" : "Healthy"}
+          <span className={`h-1.5 w-1.5 rounded-full ${error ? "bg-soc-red" : loading ? "bg-soc-amber" : versions.length ? "bg-soc-green" : "bg-soc-amber"}`} />
+          {error ? "Unavailable" : loading ? "Syncing" : versions.length ? "Reported" : "No model reported"}
         </span>
       </div>
 

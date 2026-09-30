@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { MODEL_INTEGRATION_ENABLED } from "../lib/featureFlags";
 import { useDashboardStore } from "../store/dashboardStore";
 
 const statusTone = {
@@ -19,7 +20,7 @@ export default function ModelCandidatesPanel() {
   const [actionError, setActionError] = useState(null);
 
   useEffect(() => {
-    if (canManageModels) fetchModelCandidates();
+    if (canManageModels && MODEL_INTEGRATION_ENABLED) fetchModelCandidates();
   }, [canManageModels, fetchModelCandidates]);
 
   async function runAction(id, action) {
@@ -35,6 +36,22 @@ export default function ModelCandidatesPanel() {
   }
 
   const pending = items.filter((candidate) => candidate.status === "pending_approval");
+
+  if (!MODEL_INTEGRATION_ENABLED) {
+    return (
+      <section className="soc-glass mt-4 p-5">
+        <h2 className="soc-section-title">Candidate review</h2>
+        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-soc-muted">
+          Candidate approval and rollback controls will appear after Colab artifacts are connected to the model registry. Model changes stay disabled until then.
+        </p>
+        <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-soc-muted">
+          <span className="rounded border border-soc-border px-2.5 py-1.5">Artifact validation</span>
+          <span className="rounded border border-soc-border px-2.5 py-1.5">Registry handoff</span>
+          <span className="rounded border border-soc-border px-2.5 py-1.5">Promotion review</span>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="soc-glass mt-4 p-5">

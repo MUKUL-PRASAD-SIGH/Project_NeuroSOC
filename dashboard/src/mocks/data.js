@@ -161,7 +161,6 @@ function buildAlert(index, offsetMinutes, override = {}) {
     locationLabel: user.locationLabel,
     dimensions: buildDimensions(index + 1),
     recentVerdicts: buildRecentVerdicts(verdict, index + 1),
-    modelVersion: "neuroshield-xgb-2026.04.20",
   };
 }
 
@@ -303,17 +302,10 @@ export const mockStats = {
 };
 
 export const mockModelStatus = {
-  versions: [
-    { label: "Primary", value: "neuroshield-xgb-2026.04.24" },
-    { label: "Shadow", value: "neuroshield-transformer-2026.04.22" },
-    { label: "Ruleset", value: "velocity-guard-v3.9.1" },
-  ],
-  validationF1: [
-    { label: "HACKER", value: 0.98 },
-    { label: "FORGETFUL_USER", value: 0.93 },
-    { label: "LEGITIMATE", value: 0.96 },
-  ],
-  lastRetrainedAt: "2026-04-24T04:30:00.000Z",
+  // Model identity and metrics are supplied from Colab after its integration is ready.
+  versions: [],
+  validationF1: [],
+  lastRetrainedAt: null,
 };
 
 export function buildTimelineData(alerts) {

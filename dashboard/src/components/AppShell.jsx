@@ -1,6 +1,7 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { OIDC_REQUIRED } from "../lib/auth";
+import { DEMO_DATA_ENABLED, MODEL_INTEGRATION_ENABLED } from "../lib/featureFlags";
 import { useDashboardStore } from "../store/dashboardStore";
 
 const NAV_ITEMS = [
@@ -35,12 +36,17 @@ function useClock() {
 function ConnectionStatus() {
   const status = useDashboardStore((state) => state.alerts.status);
   const connected = status === "connected";
+  const label = DEMO_DATA_ENABLED ? "Demo data" : connected ? "Live" : "Connecting";
 
   return (
-    <span className="inline-flex items-center gap-2 rounded-md border border-soc-border bg-soc-panelSoft px-2.5 py-1 text-xs text-soc-muted">
-      <span className={connected ? "soc-live-dot" : "inline-block h-2 w-2 rounded-full bg-soc-amber"} />
-      <span className="text-soc-text">{connected ? "Live" : "Connecting"}</span>
-      <span className="hidden sm:inline">stream</span>
+    <span
+      role="status"
+      aria-label={DEMO_DATA_ENABLED ? "Demo data stream" : `${label} alert stream`}
+      className="inline-flex items-center gap-2 rounded-md border border-soc-border bg-soc-panelSoft px-2.5 py-1 text-xs text-soc-muted"
+    >
+      <span className={connected && !DEMO_DATA_ENABLED ? "soc-live-dot" : "inline-block h-2 w-2 rounded-full bg-soc-amber"} />
+      <span className="text-soc-text">{label}</span>
+      {DEMO_DATA_ENABLED ? <span className="hidden sm:inline">stream</span> : null}
     </span>
   );
 }
@@ -152,7 +158,7 @@ export default function AppShell() {
   }, [fetchStats, dataAllowed]);
 
   useEffect(() => {
-    if (!dataAllowed) return undefined;
+    if (!dataAllowed || !MODEL_INTEGRATION_ENABLED) return undefined;
     fetchModelStatus();
     const modelInterval = window.setInterval(fetchModelStatus, 60000);
 
@@ -192,6 +198,11 @@ export default function AppShell() {
     <>
       <TopBar />
       <main className="soc-shell">
+        {DEMO_DATA_ENABLED ? (
+          <aside className="mb-5 rounded-md border border-soc-amber/35 bg-soc-amber/5 px-4 py-3 text-xs leading-relaxed text-soc-muted">
+            <span className="font-semibold text-soc-amber">Demo data.</span> Seeded events refresh locally. Analyst decisions stay in this browser and are not written to the backend.
+          </aside>
+        ) : null}
         <Outlet />
       </main>
     </>

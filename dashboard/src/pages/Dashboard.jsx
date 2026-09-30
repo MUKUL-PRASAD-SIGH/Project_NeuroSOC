@@ -9,6 +9,7 @@ import StatsBar from "../components/StatsBar";
 import ThreatMap from "../components/ThreatMap";
 import UserProfileModal from "../components/UserProfileModal";
 import VerdictTimeline from "../components/Charts/VerdictTimeline";
+import { DEMO_DATA_ENABLED, MODEL_INTEGRATION_ENABLED } from "../lib/featureFlags";
 import { buildTimelineData } from "../mocks/data";
 import { useDashboardStore } from "../store/dashboardStore";
 
@@ -20,7 +21,7 @@ export default function DashboardPage() {
   const tabs = [
     { key: "overview", label: "Activity" },
     { key: "threat-map", label: "Threat map" },
-    { key: "model-health", label: "Model health" },
+    { key: "model-health", label: MODEL_INTEGRATION_ENABLED ? "Model health" : "Model integration" },
     ...(import.meta.env.DEV ? [{ key: "pipeline", label: "Pipeline" }] : []),
   ];
   const requestedTab = searchParams.get("view");
@@ -46,7 +47,11 @@ export default function DashboardPage() {
           <p className="soc-kicker">Overview</p>
           <h1 className="soc-title mt-1">Security operations</h1>
           <p className="mt-1 max-w-2xl text-sm text-soc-muted">
-            Real-time security event classification with analyst review and model feedback.
+            {DEMO_DATA_ENABLED
+              ? "Explore the alert investigation and analyst review flow. Colab model signals are reserved for integration."
+              : !MODEL_INTEGRATION_ENABLED
+                ? "Investigate live events and analyst decisions. Colab model signals will appear when the service is connected."
+                : "Security event classification with analyst review and model feedback."}
           </p>
         </div>
       </header>

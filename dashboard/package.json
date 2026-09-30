@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:demo": "vite --config vite.demo.config.mjs --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview"
   },

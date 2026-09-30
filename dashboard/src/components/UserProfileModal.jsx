@@ -7,6 +7,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { OIDC_REQUIRED } from "../lib/auth";
+import { DEMO_DATA_ENABLED } from "../lib/featureFlags";
 import { getSandboxReplay, submitAlertDecision } from "../services/dashboardApi";
 import { useDashboardStore } from "../store/dashboardStore";
 
@@ -96,29 +97,24 @@ const verdictBadge = {
 
 const verdictHeadline = {
   HACKER: "Threat",
-  FORGETFUL_USER: "Review — likely genuine user",
+  FORGETFUL_USER: "Review — unusual sign-in pattern",
   LEGITIMATE: "Normal",
   INCONCLUSIVE: "Insufficient Signal",
 };
 
 const verdictExplain = {
   HACKER: (a) =>
-    `This session was classified as a likely attacker with ${Math.round((a.score || 0) * 100)}% confidence. ` +
-    `The SNN detected an anomalous spike pattern, the LNN found no matching behavioural history, ` +
-    `and XGBoost classified the traffic as ${a.raw?.xgb_class || "malicious"}. ` +
-    `The session was diverted to the sandbox.`,
+    `This session was flagged as a likely threat with a ${Math.round((a.score || 0) * 100)}% risk score. ` +
+    `Review the available event evidence and record a decision. Captured sandbox activity appears below when available.`,
   FORGETFUL_USER: (a) =>
-    `This session raised flags (${Math.round((a.score || 0) * 100)}% risk) but did not reach the attacker threshold. ` +
-    `The pattern is consistent with a confused or locked-out user — repeated failures, known device, ` +
-    `behaviour that stopped when challenged. No automated block was applied. ` +
-    `Analyst review is recommended before restoring access.`,
+    `This session was flagged for review with a ${Math.round((a.score || 0) * 100)}% risk score. ` +
+    `Review the available sign-in evidence before choosing whether to restore access or escalate.`,
   LEGITIMATE: (a) =>
-    `All checks passed for this session (risk score ${Math.round((a.score || 0) * 100)}%). ` +
-    `The SNN found no spike anomalies, the LNN matched the user's stored behavioural baseline, ` +
-    `and XGBoost returned ${a.raw?.xgb_class || "BENIGN"}. No action required.`,
+    `This session was classified as normal with a ${Math.round((a.score || 0) * 100)}% risk score. ` +
+    `Review the returned event details if you need to override the result.`,
   INCONCLUSIVE: (a) =>
-    `Not enough signal to make a confident decision (score ${Math.round((a.score || 0) * 100)}%). ` +
-    `The session is being monitored. Further activity will update this verdict automatically.`,
+    `The returned evidence is not enough to classify this session confidently (${Math.round((a.score || 0) * 100)}% risk). ` +
+    `Keep it under review until more signal is available.`,
 };
 
 function ModelBreakdown({ raw }) {
@@ -412,10 +408,12 @@ export default function UserProfileModal() {
               {/* Left — radar + model breakdown */}
               <section className="rounded-lg border border-soc-border/80 bg-soc-panelSoft/40 p-4">
                 <p className="text-xs font-medium text-soc-muted">
-                  Behavioural Signal Radar
+                  {DEMO_DATA_ENABLED ? "Illustrative Signal Profile" : "Behavioural Signal Radar"}
                 </p>
                 <p className="mt-1 text-xs text-soc-muted">
-                  Each axis is a normalised signal extracted from the session. Higher = more anomalous.
+                  {DEMO_DATA_ENABLED
+                    ? "Sample values show where session signals will appear; these are not Colab model outputs."
+                    : "Normalised signals returned with this session. Higher values are more anomalous."}
                 </p>
                 <div className="mt-3 h-[300px]">
                   <ResponsiveContainer width="100%" height="100%">
@@ -436,7 +434,11 @@ export default function UserProfileModal() {
                 <p className="mt-4 text-xs font-medium text-soc-muted">
                   Model Breakdown
                 </p>
-                <ModelBreakdown raw={alert.raw} />
+                {DEMO_DATA_ENABLED && !alert.raw ? (
+                  <p className="mt-2 text-xs leading-relaxed text-soc-muted">
+                    Model-level scores will appear here when the Colab inference output is connected.
+                  </p>
+                ) : <ModelBreakdown raw={alert.raw} />}
                 <TopFeatures explanation={alert.explanation} />
               </section>
 
