@@ -1,0 +1,60 @@
+name: Publish Python SDK
+
+# Release: bump the version in sdk/python/pyproject.toml and sdk/python/neurosoc/__init__.py,
+# then push a matching tag, e.g. `git tag sdk-py-v0.1.0 && git push origin sdk-py-v0.1.0`.
+# Uses PyPI trusted publishing, so no API token is stored in the repo.
+on:
+  push:
+    tags:
+      - "sdk-py-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check the tag matches the package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF_NAME#sdk-py-v}"
+          project=$(python -c "import tomllib; print(tomllib.load(open('sdk/python/pyproject.toml','rb'))['project']['version'])")
+          module=$(python -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('sdk/python/neurosoc/__init__.py').read()).group(1))")
+          echo "tag=$tag pyproject=$project __version__=$module"
+          [ "$tag" = "$project" ] && [ "$tag" = "$module" ]
+      - name: Test
+        run: |
+          pip install -r inference-service/requirements.txt pytest
+          pytest tests/test_python_sdk.py -q
+      - name: Build
+        working-directory: sdk/python
+        run: |
+          pip install build twine
+          python -m build
+          twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-sdk-dist
+          path: sdk/python/dist/
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/neurosoc
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-sdk-dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

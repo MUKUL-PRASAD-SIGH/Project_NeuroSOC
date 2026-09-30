@@ -38,6 +38,7 @@ Thumbs.db
 *.md
 !/README.md
 !/sdk/README.md
+!/sdk/python/README.md
 Docs/
 docs/
 builderA/
