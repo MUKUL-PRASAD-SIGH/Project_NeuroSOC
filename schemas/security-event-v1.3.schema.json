@@ -1,0 +1,551 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:neurosoc:schema:security-event:1.3.0",
+  "title": "NeuroSOC Security Event v1.3",
+  "description": "Versioned Kafka event contract. v1.3 keeps the v1.2 network events unchanged and adds behavior.event: a domain-agnostic entity/action/resource event emitted by the NeuroSOC SDKs.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/networkPacket"
+    },
+    {
+      "$ref": "#/$defs/networkFlow"
+    },
+    {
+      "$ref": "#/$defs/behaviorEvent"
+    }
+  ],
+  "$defs": {
+    "networkPacket": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "tenant_id",
+        "event_type",
+        "packet_id",
+        "timestamp",
+        "src_ip",
+        "dst_ip",
+        "src_port",
+        "dst_port",
+        "protocol",
+        "length",
+        "flags",
+        "ttl",
+        "source",
+        "source_id",
+        "correlation_id",
+        "idempotency_key"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "1.3"
+        },
+        "tenant_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+        },
+        "event_type": {
+          "const": "network.packet"
+        },
+        "packet_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "timestamp": {
+          "type": "number",
+          "minimum": 0
+        },
+        "src_ip": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "dst_ip": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "src_port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "dst_port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "protocol": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "flags": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        },
+        "ttl": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "source_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "correlation_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 192
+        },
+        "session_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "user_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256
+        },
+        "extra": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "networkFlow": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "tenant_id",
+        "event_type",
+        "flow_id",
+        "timestamp",
+        "src_ip",
+        "dst_ip",
+        "src_port",
+        "dst_port",
+        "protocol",
+        "features",
+        "raw_features",
+        "n_packets",
+        "source_id",
+        "correlation_id",
+        "idempotency_key"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "1.3"
+        },
+        "tenant_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+        },
+        "event_type": {
+          "const": "network.flow"
+        },
+        "flow_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "timestamp": {
+          "type": "number",
+          "minimum": 0
+        },
+        "src_ip": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "dst_ip": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "src_port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "dst_port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "protocol": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "source_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "correlation_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 192
+        },
+        "features": {
+          "type": "array",
+          "minItems": 80,
+          "maxItems": 80,
+          "items": {
+            "type": "number"
+          }
+        },
+        "raw_features": {
+          "type": "array",
+          "minItems": 80,
+          "maxItems": 80,
+          "items": {
+            "type": "number"
+          }
+        },
+        "n_packets": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "behaviorEvent": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "tenant_id",
+        "event_type",
+        "event_id",
+        "timestamp",
+        "source",
+        "source_id",
+        "correlation_id",
+        "idempotency_key",
+        "session_id",
+        "entity",
+        "action",
+        "resource",
+        "result"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "1.3"
+        },
+        "tenant_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+        },
+        "event_type": {
+          "const": "behavior.event"
+        },
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "timestamp": {
+          "type": "number",
+          "minimum": 0
+        },
+        "source": {
+          "enum": [
+            "sdk-js",
+            "sdk-py",
+            "extension",
+            "server"
+          ]
+        },
+        "source_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "correlation_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 192
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "entity": {
+          "type": "object",
+          "required": [
+            "id",
+            "type"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "type": {
+              "enum": [
+                "human",
+                "agent",
+                "wallet",
+                "service"
+              ]
+            }
+          }
+        },
+        "action": {
+          "enum": [
+            "session.start",
+            "page.view",
+            "form.submit",
+            "account.create",
+            "auth.login",
+            "auth.logout",
+            "wallet.connect",
+            "wallet.sign",
+            "campaign.join",
+            "task.complete",
+            "reward.claim",
+            "referral.create",
+            "token.buy",
+            "token.sell",
+            "token.transfer",
+            "liquidity.add",
+            "liquidity.remove",
+            "agent.run",
+            "agent.tool_call",
+            "agent.config_change",
+            "permission.change",
+            "api_key.create",
+            "api.call"
+          ]
+        },
+        "resource": {
+          "type": "object",
+          "required": [
+            "id",
+            "type"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "type": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "sensitivity": {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "critical"
+              ]
+            }
+          }
+        },
+        "result": {
+          "enum": [
+            "success",
+            "failure",
+            "denied"
+          ]
+        },
+        "value": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "type": "number",
+              "minimum": 0
+            },
+            "asset": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 32
+            },
+            "destination": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256
+            }
+          }
+        },
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ip_hash": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256
+            },
+            "ip_prefix_hash": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256
+            },
+            "device_hash": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256
+            },
+            "user_agent_hash": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256
+            },
+            "geo": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256
+            },
+            "wallet": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256
+            },
+            "funded_by": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256
+            },
+            "origin": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256
+            },
+            "page": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256
+            }
+          }
+        },
+        "telemetry": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "session_vector": {
+              "type": "array",
+              "minItems": 20,
+              "maxItems": 20,
+              "items": {
+                "type": "number"
+              }
+            },
+            "event_count": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        },
+        "agent": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "tool": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 128
+            },
+            "instruction_source": {
+              "enum": [
+                "owner",
+                "system",
+                "external_content",
+                null
+              ]
+            },
+            "owner_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
