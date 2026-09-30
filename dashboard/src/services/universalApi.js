@@ -29,6 +29,28 @@ export async function fetchSites() {
   return data.sites || [];
 }
 
+export async function createSite(siteData) {
+  const { data } = await apiClient.post("/api/v1/universal/sites", siteData);
+  return data;
+}
+
+export async function updateSite(siteId, siteData) {
+  const { data } = await apiClient.put(`/api/v1/universal/sites/${encodeURIComponent(siteId)}`, siteData);
+  return data;
+}
+
+// The NovaTrust demo backend (only exists when the API runs with NEUROSOC_DEMO_MODE=true).
+export async function fetchDemoConfig() {
+  const { data } = await apiClient.get("/api/v1/demo/config");
+  return data;
+}
+
+// Hands the new application's secret key to the demo backend (server memory only; it is never returned).
+export async function connectDemoBackend(secretKey) {
+  const { data } = await apiClient.post("/api/v1/demo/connect", { secret_key: secretKey });
+  return data;
+}
+
 /** Live universal verdicts: a snapshot on connect, then one message per verdict. Reconnects. */
 export function subscribeToUniversal({ onSnapshot, onVerdict, onStatusChange }) {
   let socket;
