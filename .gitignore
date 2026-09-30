@@ -72,3 +72,8 @@ data/CICIDS2017/
 data/CICDDoS2019/
 datasets/raw/
 datasets/processed/
+
+# Simulation files and runs
+sim_*.py
+simulation_portal/
+simulation_runs/
