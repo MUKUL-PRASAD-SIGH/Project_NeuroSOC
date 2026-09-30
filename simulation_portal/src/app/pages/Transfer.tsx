@@ -49,18 +49,22 @@ export default function Transfer() {
     return sqlPatterns.some(pattern => pattern.test(text));
   };
 
-  const confirmTransfer = (message?: string) => {
-    writePortalSession({
-      recentTransfers: [
-        {
-          id: `tx-${Date.now()}`,
-          date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-          description: `Transfer to ${recipientName || 'external account'}`,
-          amount: Number(amount) || 0,
-        },
-        ...(session.recentTransfers || []),
-      ],
-    });
+  const confirmTransfer = (message?: string, accountState?: any) => {
+    if (accountState) {
+      writePortalSession({ account: accountState, recentTransfers: [] });
+    } else {
+      writePortalSession({
+        recentTransfers: [
+          {
+            id: `tx-${Date.now()}`,
+            date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+            description: `Transfer to ${recipientName || 'external account'}`,
+            amount: Number(amount) || 0,
+          },
+          ...(session.recentTransfers || []),
+        ],
+      });
+    }
     setFeedback({
       tone: 'success',
       message: message || `Transfer of $${amount} to ${recipientName} has been initiated.`,
@@ -119,8 +123,7 @@ export default function Transfer() {
       });
 
       if (result.sandbox?.active) {
-        // Diverted sessions get the same confirmation a customer would see.
-        confirmTransfer();
+        confirmTransfer(undefined, result.account);
         return;
       }
 
@@ -137,7 +140,7 @@ export default function Transfer() {
         return;
       }
 
-      confirmTransfer();
+      confirmTransfer(undefined, result.account);
     } catch (error) {
       console.error('Transfer error:', error);
       setFeedback({

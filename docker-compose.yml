@@ -312,6 +312,7 @@ services:
         VITE_OIDC_REQUIRED: ${VITE_OIDC_REQUIRED:-false}
         # Shows the SDK Protection page; pair with ENABLE_UNIVERSAL_ENGINE=true on inference.
         VITE_UNIVERSAL_ENABLED: ${VITE_UNIVERSAL_ENABLED:-false}
+        VITE_MODEL_INTEGRATION_ENABLED: "true"
     profiles: ["phase11plus", "demo"]
     networks:
       neuroshield-net: {}

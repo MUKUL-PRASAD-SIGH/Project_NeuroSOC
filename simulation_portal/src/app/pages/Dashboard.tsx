@@ -78,7 +78,8 @@ export default function Dashboard() {
   const balance = (session.account?.balance ?? dashboardData.account.balance) - sentTotal;
   const animatedBalance = useCountUp(balance);
   const accountMasked = session.account?.accountMasked || dashboardData.account.accountMasked;
-  const transactions = [
+  const backendTransactions = session.account?.transactions || [];
+  const transactions = backendTransactions.length > 0 ? backendTransactions : [
     ...recentTransfers.map((transfer) => ({
       id: transfer.id,
       date: transfer.date,
