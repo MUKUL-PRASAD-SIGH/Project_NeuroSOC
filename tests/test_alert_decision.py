@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -64,30 +65,42 @@ def _isolate_runtime_state():
 
 
 @pytest.fixture
-def decision_capture(monkeypatch):
+def decision_capture(monkeypatch, protected_client):
     calls = {"training_rows": [], "decisions": []}
 
-    def fake_write_labeled_training_row(tenant_id, session_id, features, label, confidence, attack_type, trigger_reason, metadata):
-        calls["training_rows"].append(
-            {
-                "tenant_id": tenant_id,
-                "session_id": session_id,
-                "label": label,
-                "confidence": confidence,
-                "attack_type": attack_type,
-                "trigger_reason": trigger_reason,
-            }
-        )
-        return True
-
-    def fake_record_alert_decision(tenant_id, session_id, decision, status, decided_by, decided_by_roles, notes):
+    def fake_record_analyst_decision(
+        tenant_id,
+        session_id,
+        decision,
+        status,
+        decided_by,
+        decided_by_roles,
+        notes,
+        training_row,
+        audit_event,
+    ):
+        if training_row is not None:
+            calls["training_rows"].append(
+                {
+                    "tenant_id": tenant_id,
+                    "session_id": session_id,
+                    **training_row,
+                }
+            )
         calls["decisions"].append(
             {"tenant_id": tenant_id, "session_id": session_id, "decision": decision, "status": status, "decided_by": decided_by}
         )
-        return None
+        protected_client.audit_events.append(audit_event)
+        return {
+            "session_id": session_id,
+            "decision": decision,
+            "status": status,
+            "decided_by": decided_by,
+            "decided_at": datetime.now(timezone.utc),
+            "training_label_written": training_row["label"] if training_row else None,
+        }
 
-    monkeypatch.setattr(inference_main.runtime.repository, "write_labeled_training_row", fake_write_labeled_training_row)
-    monkeypatch.setattr(inference_main.runtime.repository, "record_alert_decision", fake_record_alert_decision)
+    monkeypatch.setattr(inference_main.runtime.repository, "record_analyst_decision", fake_record_analyst_decision)
     return calls
 
 
@@ -222,3 +235,21 @@ def test_alert_list_reflects_the_recorded_decision_status(protected_client, deci
     matching = [alert for alert in alerts_response.json() if alert["id"] == "decision-list-test"]
     assert matching and matching[0]["status"] == "closed"
     assert matching[0]["decision"] == "confirm_threat"
+
+
+def test_decision_is_not_cached_when_atomic_persistence_fails(protected_client, decision_capture, monkeypatch):
+    session_id = "decision-audit-failure-test"
+    _seed_verdict(session_id)
+
+    def fail_atomic_write(*_args, **_kwargs):
+        raise RuntimeError("database transaction failed")
+
+    monkeypatch.setattr(inference_main.runtime.repository, "record_analyst_decision", fail_atomic_write)
+    response = protected_client.post(
+        f"/api/v1/alerts/{session_id}/decision",
+        json={"decision": "confirm_threat"},
+        headers={"Authorization": "Bearer operator"},
+    )
+
+    assert response.status_code == 503
+    assert ("test-tenant", session_id) not in inference_main.runtime._alert_decisions

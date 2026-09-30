@@ -1468,6 +1468,56 @@ class VerdictRepository:
                     )
         conn.close()
 
+    def _append_audit_event(self, cur: Any, event: dict[str, Any]) -> None:
+        chain_id = str(event.get("tenant_id") or "__unassigned__")
+        stored_event = {**event, "tenant_id": chain_id}
+        cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (chain_id,))
+        cur.execute(
+            "SELECT chain_sequence, event_hash FROM security_audit_events "
+            "WHERE chain_id = %s AND chain_sequence IS NOT NULL "
+            "ORDER BY chain_sequence DESC LIMIT 1",
+            (chain_id,),
+        )
+        previous = cur.fetchone() or {}
+        previous_hash = str(previous.get("event_hash") or GENESIS_HASH)
+        chain_sequence = int(previous.get("chain_sequence") or 0) + 1
+        created_at = datetime.now(timezone.utc)
+        chained_event = {
+            **stored_event,
+            "chain_id": chain_id,
+            "chain_sequence": chain_sequence,
+            "previous_hash": previous_hash,
+            "created_at": created_at,
+        }
+        event_hash = audit_event_hash(previous_hash, chained_event)
+        cur.execute(
+            """
+            INSERT INTO security_audit_events (
+                event_id, tenant_id, chain_id, chain_sequence, previous_hash, event_hash,
+                event_type, outcome, actor_id, actor_roles, http_method, route,
+                source_ip, resource_id, details, created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                stored_event["event_id"],
+                chain_id,
+                chain_id,
+                chain_sequence,
+                previous_hash,
+                event_hash,
+                stored_event["event_type"],
+                stored_event["outcome"],
+                stored_event.get("actor_id"),
+                Json(stored_event.get("actor_roles", [])),
+                stored_event.get("http_method"),
+                stored_event["route"],
+                stored_event.get("source_ip"),
+                stored_event.get("resource_id"),
+                Json(stored_event.get("details", {})),
+                created_at,
+            ),
+        )
+
     def record_audit_event(self, event: dict[str, Any]) -> None:
         chain_id = str(event.get("tenant_id") or "__unassigned__")
         stored_event = {**event, "tenant_id": chain_id}
@@ -1478,52 +1528,7 @@ class VerdictRepository:
         try:
             with conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (chain_id,))
-                    cur.execute(
-                        "SELECT chain_sequence, event_hash FROM security_audit_events "
-                        "WHERE chain_id = %s AND chain_sequence IS NOT NULL "
-                        "ORDER BY chain_sequence DESC LIMIT 1",
-                        (chain_id,),
-                    )
-                    previous = cur.fetchone() or {}
-                    previous_hash = str(previous.get("event_hash") or GENESIS_HASH)
-                    chain_sequence = int(previous.get("chain_sequence") or 0) + 1
-                    created_at = datetime.now(timezone.utc)
-                    chained_event = {
-                        **stored_event,
-                        "chain_id": chain_id,
-                        "chain_sequence": chain_sequence,
-                        "previous_hash": previous_hash,
-                        "created_at": created_at,
-                    }
-                    event_hash = audit_event_hash(previous_hash, chained_event)
-                    cur.execute(
-                        """
-                        INSERT INTO security_audit_events (
-                            event_id, tenant_id, chain_id, chain_sequence, previous_hash, event_hash,
-                            event_type, outcome, actor_id, actor_roles, http_method, route,
-                            source_ip, resource_id, details, created_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (
-                            stored_event["event_id"],
-                            chain_id,
-                            chain_id,
-                            chain_sequence,
-                            previous_hash,
-                            event_hash,
-                            stored_event["event_type"],
-                            stored_event["outcome"],
-                            stored_event.get("actor_id"),
-                            Json(stored_event.get("actor_roles", [])),
-                            stored_event.get("http_method"),
-                            stored_event["route"],
-                            stored_event.get("source_ip"),
-                            stored_event.get("resource_id"),
-                            Json(stored_event.get("details", {})),
-                            created_at,
-                        ),
-                    )
+                    self._append_audit_event(cur, stored_event)
         finally:
             conn.close()
 
@@ -1741,6 +1746,110 @@ class VerdictRepository:
                     )
                     row = cur.fetchone()
             return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def record_analyst_decision(
+        self,
+        tenant_id: str,
+        session_id: str,
+        decision: str,
+        status: str,
+        decided_by: str,
+        decided_by_roles: list[str],
+        notes: str | None,
+        training_row: dict[str, Any] | None,
+        audit_event: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Persist a decision, its optional training label, and audit event atomically."""
+        conn = self._connect(tenant_id)
+        if conn is None:
+            local_event = {
+                **audit_event,
+                "details": {**audit_event.get("details", {}), "training_label_written": None},
+            }
+            log.info("security_audit %s", json.dumps(local_event, sort_keys=True, separators=(",", ":")))
+            return {
+                "session_id": session_id,
+                "decision": decision,
+                "status": status,
+                "decided_by": decided_by,
+                "decided_at": datetime.now(timezone.utc),
+                "training_label_written": None,
+            }
+
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    training_label_written = None
+                    if training_row is not None:
+                        conflict_target = (
+                            "(tenant_id, session_id) WHERE tenant_id IS NOT NULL"
+                            if APP_ENV in {"staging", "production"}
+                            else "(session_id)"
+                        )
+                        cur.execute(
+                            f"""
+                            INSERT INTO labeled_training_data (
+                                tenant_id, session_id, features, label, confidence, attack_type,
+                                trigger_reason, metadata, created_at
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                            ON CONFLICT {conflict_target} DO UPDATE
+                            SET features = EXCLUDED.features,
+                                label = EXCLUDED.label,
+                                confidence = EXCLUDED.confidence,
+                                attack_type = EXCLUDED.attack_type,
+                                trigger_reason = EXCLUDED.trigger_reason,
+                                metadata = EXCLUDED.metadata,
+                                created_at = NOW()
+                            """,
+                            (
+                                tenant_id,
+                                session_id,
+                                Json(training_row["features"]),
+                                training_row["label"],
+                                training_row["confidence"],
+                                training_row["attack_type"],
+                                training_row["trigger_reason"],
+                                Json(training_row["metadata"]),
+                            ),
+                        )
+                        training_label_written = str(training_row["label"])
+
+                    cur.execute(
+                        """
+                        INSERT INTO alert_decisions (
+                            tenant_id, session_id, decision, status, decided_by, decided_by_roles, notes
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        RETURNING session_id, decision, status, decided_by, decided_at
+                        """,
+                        (
+                            tenant_id,
+                            session_id,
+                            decision,
+                            status,
+                            decided_by,
+                            Json(decided_by_roles),
+                            notes,
+                        ),
+                    )
+                    row = cur.fetchone()
+                    if row is None:
+                        raise RuntimeError("Decision insert returned no persisted row.")
+
+                    chained_event = {
+                        **audit_event,
+                        "details": {
+                            **audit_event.get("details", {}),
+                            "training_label_written": training_label_written,
+                        },
+                    }
+                    self._append_audit_event(cur, chained_event)
+
+            persisted = dict(row)
+            persisted["training_label_written"] = training_label_written
+            return persisted
         finally:
             conn.close()
 
@@ -2355,6 +2464,10 @@ DECISION_STATUS_BY_DECISION: dict[str, str] = {
 TRAINING_LABEL_DECISIONS = frozenset({"confirm_threat", "false_positive"})
 
 
+class DecisionPersistenceError(RuntimeError):
+    """Raised when the requested decision cannot be durably audited and stored."""
+
+
 def _coerce_verdict_features_for_training(verdict: dict[str, Any]) -> list[float]:
     raw_features = verdict.get("features")
     if isinstance(raw_features, list) and raw_features:
@@ -2713,9 +2826,7 @@ class InferenceRuntime:
             return None
 
         status = DECISION_STATUS_BY_DECISION.get(decision, "triaged")
-        decided_at = datetime.now(timezone.utc)
-
-        training_label_written: str | None = None
+        training_row: dict[str, Any] | None = None
         if decision in TRAINING_LABEL_DECISIONS:
             if decision == "false_positive":
                 label = "BENIGN"
@@ -2723,50 +2834,55 @@ class InferenceRuntime:
                 candidate_label = str(verdict.get("xgb_class") or "").strip().upper()
                 label = candidate_label if candidate_label in TRAINING_CLASS_NAMES else "OTHER"
             features = _coerce_verdict_features_for_training(verdict)
-            written = self.repository.write_labeled_training_row(
+            training_row = {
+                "features": features,
+                "label": label,
+                "confidence": 1.0,
+                "attack_type": label,
+                "trigger_reason": f"analyst_decision:{decision}",
+                "metadata": {"decided_by": actor_id, "decision": decision},
+            }
+
+        audit_event = _new_security_audit_event(
+            "security.alert_decision",
+            "succeeded",
+            route="/api/alerts/{session_id}/decision",
+            http_method="POST",
+            actor_id=actor_id,
+            actor_roles=actor_roles,
+            tenant_id=tenant_id,
+            resource_id=session_id,
+            details={"decision": decision, "status": status},
+        )
+        try:
+            persisted = self.repository.record_analyst_decision(
                 tenant_id,
                 session_id,
-                features,
-                label,
-                1.0,
-                label,
-                f"analyst_decision:{decision}",
-                {"decided_by": actor_id, "decision": decision},
+                decision,
+                status,
+                actor_id,
+                actor_roles,
+                notes,
+                training_row,
+                audit_event,
             )
-            if written:
-                training_label_written = label
+        except Exception as exc:
+            log.error("Analyst decision persistence failed (%s)", type(exc).__name__)
+            raise DecisionPersistenceError("Analyst decision could not be durably recorded.") from exc
+        if persisted is None:
+            log.error("Analyst decision persistence returned no row.")
+            raise DecisionPersistenceError("Analyst decision could not be durably recorded.")
 
-        self.repository.record_alert_decision(tenant_id, session_id, decision, status, actor_id, actor_roles, notes)
         record = {
             "session_id": session_id,
             "decision": decision,
             "status": status,
             "decided_by": actor_id,
-            "decided_at": decided_at,
-            "training_label_written": training_label_written,
+            "decided_at": persisted["decided_at"],
+            "training_label_written": persisted.get("training_label_written"),
         }
         with self._lock:
             self._alert_decisions[(tenant_id, session_id)] = record
-        try:
-            self.repository.record_audit_event(
-                _new_security_audit_event(
-                    "security.alert_decision",
-                    "succeeded",
-                    route="/api/alerts/{session_id}/decision",
-                    http_method="POST",
-                    actor_id=actor_id,
-                    actor_roles=actor_roles,
-                    tenant_id=tenant_id,
-                    resource_id=session_id,
-                    details={
-                        "decision": decision,
-                        "status": status,
-                        "training_label_written": training_label_written,
-                    },
-                )
-            )
-        except Exception as exc:
-            log.error("Security audit write failed for alert decision (%s)", type(exc).__name__)
         return record
 
 
@@ -3630,7 +3746,10 @@ def submit_alert_decision(session_id: str, payload: AlertDecisionRequest, reques
     tenant_id = _request_tenant_id(request)
     actor_id = str(identity.get("username") or identity.get("user_id") or "anonymous-analyst")
     actor_roles = list(identity.get("roles", []))
-    record = runtime.record_decision(tenant_id, session_id, payload.decision, actor_id, actor_roles, payload.notes)
+    try:
+        record = runtime.record_decision(tenant_id, session_id, payload.decision, actor_id, actor_roles, payload.notes)
+    except DecisionPersistenceError as exc:
+        raise HTTPException(status_code=503, detail="Decision storage is temporarily unavailable.") from exc
     if record is None:
         raise HTTPException(status_code=404, detail="Alert session not found.")
     return {
