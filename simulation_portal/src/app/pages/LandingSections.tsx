@@ -204,75 +204,6 @@ const SERVICES = [
   },
 ];
 
-<<<<<<< HEAD
-=======
-const OUTCOMES = [
-  ['Continuous protection', 'Every sign-in and payment is checked in real time against how you normally bank.'],
-  ['Instant alerts', 'We let you know straight away if something does not look like you.'],
-  ['Around-the-clock team', 'Our security specialists review unusual activity 24 hours a day.'],
-];
-
-const PREVIEW_ROWS = [
-  ['Grocery store', '−£42.18'],
-  ['Salary', '+£2,800.00'],
-  ['Electricity', '−£96.40'],
-];
-
-const tabular = { fontVariantNumeric: 'tabular-nums' as const };
-
-export function Hero() {
-  return (
-    <section className="border-b border-slate-200 bg-slate-50">
-      <div className="mx-auto grid max-w-6xl items-center gap-12 px-6 py-20 md:grid-cols-[1.2fr_1fr]">
-        <div>
-          <p className="text-sm font-medium text-[#1d6fb8]">Online banking</p>
-          <h1 className="mt-3 text-4xl font-semibold leading-tight tracking-tight text-[#0b2545] md:text-5xl">
-            Banking that keeps your account safe without getting in your way.
-          </h1>
-          <p className="mt-5 max-w-xl text-base leading-relaxed text-slate-600">
-            Manage accounts, pay people and move money. Every session is checked in the background, so genuine
-            customers carry on as normal.
-          </p>
-          <div className="mt-8 flex flex-wrap gap-3">
-            <Link to="/login" className="rounded-md bg-[#0b2545] px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#13315c]">
-              Sign in to online banking
-            </Link>
-            <a
-              href="#security"
-              className="rounded-md border border-slate-300 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:border-slate-400"
-            >
-              How protection works
-            </a>
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-medium text-slate-500">Current account</p>
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-              Protected
-            </span>
-          </div>
-          <p className="mt-3 text-3xl font-semibold tracking-tight text-[#0b2545]" style={tabular}>£4,218.60</p>
-          <p className="mt-1 text-xs text-slate-500">Available balance · example</p>
-          <div className="mt-6 divide-y divide-slate-100 border-t border-slate-100 text-sm">
-            {PREVIEW_ROWS.map(([name, amount]) => (
-              <div key={name} className="flex items-center justify-between py-2.5">
-                <span className="text-slate-700">{name}</span>
-                <span className={amount.startsWith('+') ? 'text-emerald-700' : 'text-slate-900'} style={tabular}>
-                  {amount}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
->>>>>>> 10d1c4f49b8af4b47e7546c211f6063b73986fbd
 export function Services() {
   return (
     <section id="features" className="bg-[#07080d]/60 backdrop-blur-[2px]">
@@ -343,7 +274,6 @@ const OUTCOMES = [
 
 export function SecurityExplainer() {
   return (
-<<<<<<< HEAD
     <section id="security" className="border-t border-white/10 bg-[#07080d]/70 backdrop-blur-sm">
       <div className="mx-auto grid max-w-6xl gap-10 px-6 py-24 md:grid-cols-2">
         <div>
@@ -351,15 +281,6 @@ export function SecurityExplainer() {
           <p className="mt-4 text-sm leading-relaxed text-white/60">
             Each session is scored by a set of models (SNN, LNN and XGBoost) using network and behavioural signals.
             The result decides what happens next.
-=======
-    <section id="security" className="border-t border-slate-200 bg-slate-50">
-      <div className="mx-auto grid max-w-6xl gap-10 px-6 py-16 md:grid-cols-2">
-        <div>
-          <h2 className="text-2xl font-semibold tracking-tight text-[#0b2545]">How we protect your account</h2>
-          <p className="mt-3 text-sm leading-relaxed text-slate-600">
-            Security runs quietly in the background of every session, learning how you normally bank so genuine
-            customers are never slowed down.
->>>>>>> 10d1c4f49b8af4b47e7546c211f6063b73986fbd
           </p>
         </div>
         <ol className="space-y-5 text-sm">
