@@ -444,6 +444,7 @@ OIDC_REQUIRED=true
 ```
 
 - `APP_ENV=staging` or `APP_ENV=production` refuses to start unless OIDC and CORS use HTTPS, the simulation APIs are off, and a non-demo PostgreSQL URL is configured.
+- When the sandbox service is configured, staging/production also require the same randomly generated `SANDBOX_SERVICE_TOKEN` (at least 32 characters) in inference and sandbox; local/test can leave it blank.
 - `CORS_ALLOWED_ORIGINS` accepts explicit HTTP(S) origins only. `TRUSTED_PROXY_IPS` accepts IPs or CIDRs only.
 - Model reload and promotion endpoints are **admin-only**.
 - With PostgreSQL configured, authentication, alert, response-action and model-change events are written to `security_audit_events`.
@@ -458,9 +459,11 @@ OIDC_REQUIRED=true
 pytest tests/
 node --test tests/test_production_build_guard.mjs
 python scripts/check_production_credential_patterns.py
+npm --prefix dashboard run build
 ```
 
-The CI workflow in [`.github/workflows`](.github/workflows) runs the build guard and credential scan on every push.
+For the simulation portal build, set `VITE_USE_MOCKS=false` before running `npm run build` from `simulation_portal/`.
+The CI workflow in [`.github/workflows/product-safety.yml`](.github/workflows/product-safety.yml) runs the backend suite, both production frontend builds, Docker image builds, Compose configuration validation, the build guard, credential scan, and per-image SPDX SBOM artifact generation.
 
 </details>
 
@@ -514,9 +517,11 @@ Project_NeuroSOC/
 - [x] Honeypot sandbox and feedback capture
 - [x] Analyst dashboard and NovaTrust bank simulation
 - [x] Keycloak OIDC, endpoint RBAC, admin-only model controls, audit log
-- [ ] Candidate model approval, promotion and rollback workflow
-- [ ] Dashboard bearer-token wiring and multi-tenant authorization
-- [ ] Tamper-evident audit export and retention policies
+- [x] Analyst alert decisions, model candidate approval/promotion/rollback, and dashboard bearer-token wiring
+- [x] Per-alert feature explanations and Prometheus/Grafana overview
+- [ ] Multi-tenant authorization, tamper-evident audit export, and retention policies
+- [ ] Approved production dataset, model drift/fairness/adversarial evaluation, and reproducible training
+- [ ] SIEM/EDR/ticketing connectors, incident runbooks, backup/restore drills, and load/security rehearsal
 
 ---
 
