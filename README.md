@@ -21,10 +21,12 @@
 
 **[Why NeuroSOC](#-why-neurosoc)** ·
 **[Architecture](#️-architecture)** ·
-**[Detection engine](#-snn--lnn-hybrid-engine)** ·
-**[Live scenarios](#-real-world-flow-hacker-vs-forgetful-user)** ·
-**[Quick start](#-quick-start)** ·
-**[Project structure](#-project-structure)**
+**[Features](#-platform-features)** ·
+**[Detection Engine](#-snn--lnn-hybrid-engine)** ·
+**[User Personas & Sandboxing](#-user-personas--autonomous-sandboxing)** ·
+**[Quick Start](#-quick-start)** ·
+**[Roadmap](#-roadmap)** ·
+**[Docs](docs/)**
 
 </div>
 
@@ -202,6 +204,24 @@ flowchart TD
 
 ---
 
+## 🚀 Platform Features
+
+NeuroSOC provides an end-to-end autonomous defense stack designed for modern high-velocity security operations. For the exhaustive technical specification and 80-feature contract, see [`docs/FEATURES.md`](docs/FEATURES.md).
+
+| Domain | Key Capabilities | Implementation |
+|---|---|---|
+| 🧠 **Neuromorphic AI Core** | Sub-millisecond spike burst anomaly detection, continuous liquid state temporal tracking, 7-class threat classification, and heuristic tree-logic safety overrides. | Norse (LIF SNN) + Liquid Reservoir LNN + XGBoost |
+| 📡 **Multi-Modal Streaming** | Real-time intake of PCAP file streams, NetFlow (UDP 2055), Linux/Unix Syslog (RFC 3164/5424 UDP 5140), and browser behavioral telemetry. | `ingestion-service` + Apache Kafka (`raw-packets`) |
+| ⚙️ **80-Feature Flow Engine** | Bidirectional TCP/UDP flow assembly, extraction of 80 statistical flow features (IAT, packet moments, flag ratios), LRU 100k flow table, deterministic MinMax scaling. | `feature-service` + `extracted-features` |
+| 🧬 **Behavioral Profiler** | Continuous per-entity baseline tracking measuring keystroke cadence, mouse entropy, temporal hours, and request speed to compute $\Delta_{\text{Behavioral}}$. | `inference-service/core/behavioral` |
+| 🪤 **Autonomous Deception** | Zero-latency stealth session diversion ($\ge 0.50$ confidence) to high-interaction honeypot with decoy accounts ($1.2M+), synthetic transfers, honey-vault, and canary tokens. | `sandbox-service` (:8001) |
+| 🔁 **Closed-Loop Retraining** | Automated label harvesting from sandbox actions, cryptographic held-out regression benchmark gate, staged candidates, and audited 1-click promotion/rollback. | `feedback-service` + `retraining-service` |
+| 📊 **Analyst & Demo Portals** | Real-time WebSocket live alert streaming, interactive threat map, candidate model promotion panel, and NovaTrust Bank dark fintech simulation portal. | `dashboard` (:3000) + `simulation_portal` (:3001) |
+| 🔐 **Zero-Trust Hardening** | Tenant-scoped append-only SHA-256 audit hash chain, Redis cross-replica atomic rate limiting, Keycloak OIDC/RBAC, and `sslmode=verify-full` TLS checks. | PostgreSQL + Redis + Keycloak (:8081) |
+| 📈 **Cloud Observability** | Standardized Prometheus `/metrics` across all services, pre-provisioned Grafana dashboards, automated alerting webhooks, and daily SMTP digests at 06:00. | Prometheus (:9090) + Grafana (:3002) |
+
+---
+
 ## 🔬 SNN + LNN Hybrid Engine
 
 The core research idea is a detection engine that combines **Spiking Neural Networks** with **Liquid Neural Networks**:
@@ -308,26 +328,38 @@ Here is how the system treats three distinct user personas:
 ```mermaid
 sequenceDiagram
     autonumber
-    participant S as SIEM ingest
-    participant E as SNN+LNN engine
-    participant X as Sandbox
-    participant Q as Morning queue
-    actor H as Analyst (9 AM)
+    actor A as 💀 Malicious Actor
+    participant E as Hybrid Core (SNN+LNN)
+    participant S as Decoy Sandbox (:8001)
+    participant Q as Morning Review Queue
+    actor H as SOC Analyst (9 AM)
 
-    S->>E: Continuous events
-    E-->>S: P3/P4 → watch quietly, update baseline
-    E->>X: P1/P2 → divert session
-    X->>X: Collect evidence (20–30 min)
-    alt Still exploiting
-        X->>Q: Block + hold with evidence
-    else Stopped
-        X->>Q: Restore user, soft error shown
+    A->>E: High-velocity attack (Brute-force / SQLi)
+    E->>E: Fused confidence ≥ 0.50 (HACKER)
+    E-->>S: Transparent session hot-swap (no warning)
+    S-->>A: HTTP 200 OK + Fake Authenticated Session
+    A->>S: Exploits decoy vault & mock bank accounts
+    S->>S: Records payloads, IPinfo ASN, trips canary tokens
+    alt Stops probing (Confused User)
+        S->>Q: Downgrade to P3 → Soft lockout held for review
+    else Continues probing (Confirmed Hacker)
+        S->>Q: Escalate to P1 → Lock & package evidence
     end
-    Q->>H: Ranked brief at 06:00
-    H->>Q: Confirm / override / escalate
+    Q->>H: Pre-triaged evidence brief at 09:00
+    H->>Q: 1-click confirmation & IOC export
 ```
 
-The sandbox threshold is configurable with `SANDBOX_CONFIDENCE_THRESHOLD`. The default is `0.50`.
+#### The 5-Step Deception Lifecycle
+
+1. **🎯 Trigger & Stealth Diversion:** When threat confidence crosses $\ge 0.50$, the API gateway transparently hot-swaps routing to `sandbox-service` (:8001). The attacker receives standard HTTP 200 responses with zero indication they have been detected.
+2. **🪤 Decoy Playground:** The attacker enters an emulated environment with tempting fake assets: synthetic bank accounts ($1.2M+), mock wire transfer simulators, and hidden honey-vaults (`/vault`, `/internal-docs/backup.sql`) with canary files. Deliberate 80–200ms latency prevents honeypot fingerprinting.
+3. **🕵️ Live Forensic Capture:** Every keystroke, SQL payload, URL parameter, and HTTP header is stored in PostgreSQL `sandbox_interactions`; IPinfo automatically enriches ASN, ISP, and geolocation coordinates.
+4. **🔀 The Behavioral Fork (Truth Test):** 
+   - A **Dumb User** stops trying after seeing an error or session timeout, generating no hostile telemetry.
+   - A **Malicious Hacker** attempts privilege escalation, downloads decoy credentials, or probes for lateral movement—generating mathematical proof of malicious intent.
+5. **🔁 Closed-Loop Feedback:** Confirmed attacker actions publish to Kafka `feedback-trigger` for continuous model retraining without manual data labeling.
+
+For full technical specifications on personas and sandboxing telemetry, see [`docs/USER_PERSONAS_AND_SANDBOX.md`](docs/USER_PERSONAS_AND_SANDBOX.md).
 
 <details>
 <summary><b>📊 Preview the morning analyst briefing</b></summary>
@@ -353,18 +385,76 @@ The sandbox threshold is configurable with `SANDBOX_CONFIDENCE_THRESHOLD`. The d
 
 ---
 
+## 🌐 NovaTrust demo: the whole SDK pipeline in one sandbox
+
+NovaTrust is a fictional banking app, with an AI assistant called **Nova AI**, that uses the real NeuroSOC SDKs. It shows the full loop: onboard, integrate, observe, analyze, decide, protect, visualize. Nothing in it is faked. The browser runs the real JS SDK, Nova AI's backend uses the real Python SDK over HTTP, and the decisions come from the real engine. Only the bank (balances, people, transfers) is made up.
+
+```
+ browser /demo (JS SDK, publishable key, only after consent) ──► /api/v1/sdk/events ─┐
+ Nova AI ─► tools ─► guard_tool (Python SDK, secret key) ──────► /api/v1/sdk/guard ──┤
+                                                                                     ▼
+                                              NeuroSOC engine: score ─► verdict ─► live feed
+                                                                                     │ WebSocket
+                                   dashboard /protection (Sites, Live verdicts, Agent watch)
+```
+
+### Run it (no Docker needed)
+
+```bash
+# API, from inference-service/ (demo mode is off by default and refused when APP_ENV is staging/production)
+ENABLE_UNIVERSAL_ENGINE=true NEUROSOC_DEMO_MODE=true REDIS_URL='' DATABASE_URL='' KAFKA_BOOTSTRAP=127.0.0.1:1 \
+  python -m uvicorn main:app --port 8010
+# Dashboard, from dashboard/
+VITE_DEMO_MODE=true VITE_UNIVERSAL_ENABLED=true VITE_API_URL=/ VITE_PROXY_TARGET=http://127.0.0.1:8010 npx vite --port 5173
+```
+
+The demo uses the local default `OIDC_REQUIRED=false`; there is no auth exemption for demo routes. With OIDC on, sign in to the dashboard first.
+
+| Variable | Where | Meaning |
+|---|---|---|
+| `NEUROSOC_DEMO_MODE` | API | Mounts `/api/v1/demo/*`. Off: those paths 404 and the Security Testing panel is hidden. |
+| `VITE_DEMO_MODE` | dashboard | Shows the Security Testing panel (also needs the API flag). |
+| `VITE_UNIVERSAL_ENABLED` | dashboard | Shows the Protection page. |
+| `NEUROSOC_SELF_URL` | API | Where Nova AI's backend reaches NeuroSOC (default `http://127.0.0.1:$PORT`). |
+| `ANTHROPIC_API_KEY` | API | Optional. Nova AI then reasons with Claude (`claude-opus-5-5`); otherwise a deterministic scripted planner answers. The attack simulations always use the scripted planner. |
+
+### Walkthrough
+
+1. **Onboard.** Open `http://localhost:5173/protection?view=sites`, click **+ Add Application**: name, URL, type (web / agent / both), mode (**Monitor** records, **Protect** blocks), then the agent: id `novatrust-agent`, its five tools, sensitive action `token.transfer`, authorized resource `treasury`.
+2. **Integrate.** You get a public key (`pk_`, safe in a page) and a secret key (`sk_`, shown once, server only, you must confirm you copied it) plus copy-paste snippets for the script tag, an ES module and a Python agent. Install the Python SDK with `pip install neurosoc`. The JavaScript SDK is not on npm yet, so the script tag is served by the dashboard at `/neurosoc.min.js`.
+3. **Launch NovaTrust** hands the secret to the demo backend (server memory only, never returned or stored in the browser) and opens `/demo`.
+4. **Consent.** A banner asks first. Until **Accept**, the SDK sends nothing and captures nothing. You can change your choice on the Security page.
+5. **Use it.** Dashboard, Transfer, Nova AI ("What's my balance?", "Send $500 to Alice" then Confirm), Account, Security. Human transfers and Nova AI's transfers are both checked by NeuroSOC first.
+6. **Attack it.** On the Security page (demo mode only): prompt injection (a hidden "pay Orbital/attacker" instruction in an invoice), unauthorized resource (`token.transfer` on a vault the agent is not registered for), excessive actions (about 20 transfers), suspicious session (a scripted signup). Each is labelled simulated and only touches the demo's fake data. **Reset demo** restores the account and un-pauses Nova AI.
+7. **Watch.** `/protection?view=live` shows every event with Application, Agent, Action, Resource, Decision, Risk, Reason and Timestamp. Analysts can Restore or Confirm a flagged verdict.
+
+### Design choices
+
+- **Agent policy is real.** An application registers its agents; the guard blocks an unregistered agent, a tool outside its list, a resource outside `authorized_resources`, and more than `max_sensitive_per_minute` (default 10) sensitive actions, each with a specific reason.
+- **Fail closed for money.** If NeuroSOC cannot be reached, `create_transfer`/`cancel_transfer` and the Transfer page report "Security service temporarily unavailable" and move nothing. Reads (balance, transactions, portfolio) are unguarded and keep working. The browser SDK is telemetry only and never blocks the page.
+- **Monitor vs Protect.** In Monitor the decision is recorded and the action runs; in Protect it is blocked (`guard_tool(block_only_when_enforced=True)`).
+- **Who said it.** Whether an instruction came from the owner or from attached content is decided by the harness, never by the model.
+- **The SDK copy in `dashboard/src/sdk` is generated** by `scripts/sync_dashboard_sdk.py`; a test fails if it drifts.
+
+Test evidence: [`docs/DEMO_TEST_REPORT.md`](docs/DEMO_TEST_REPORT.md). Re-run the browser flow with `node scripts/e2e_novatrust.mjs` (needs a freshly started API, see the header of that file).
+
+---
+
 ## 🖥️ What You Can Try
 
 | Interface | URL | What it shows |
 |---|---|---|
+| 💳 **NovaTrust Customer Demo** | http://localhost:5173/demo (see "NovaTrust demo" above) | Production-grade fintech SaaS app protected by NeuroSOC JS & Python SDKs, with Nova AI Assistant & Security Testing panel |
+| 🛡️ **Universal Protection SOC** | http://localhost:3000/protection | Live Universal Verdicts, Agent Watch scatter plot, Application Onboarding Wizard, and Resource Integrity |
 | 📊 **Analyst dashboard** | http://localhost:3000 | Overview (activity, threat map, model health), Intel Feed, Response Ops |
-| 🏦 **NovaTrust bank portal** | http://localhost:3001 | Simulated bank with login, transfers, live verdicts and a system-flow view for red-team testing |
-| 📘 **Inference API docs** | http://localhost:8000/docs | Versioned REST API (`/api/v1/*`) and the WebSocket alert stream (`/api/v1/ws/alerts`) |
+| 🏦 **Simulation portal** | http://localhost:3001 | Legacy network & credential stuffing simulation portal |
+| 📘 **Inference API docs** | http://localhost:8000/docs | Versioned REST API (`/api/v1/*`), SDK endpoints (`/api/v1/sdk/*`), and WebSocket streams |
 | 🔐 **Keycloak** | http://localhost:8081/admin | `neurosoc` realm with `analyst`, `operator`, `admin` and `auditor` roles |
 | 📈 **Grafana / Prometheus** | http://localhost:3002 · :9090 | Operational metrics (`ops` profile) |
 
 > [!TIP]
-> In the bank portal, try three personas: a **normal customer**, a **forgetful user** who mistypes their password, and an **attacker** who scripts logins. Watch each verdict appear live on the analyst dashboard.
+> Open `http://localhost:5173/demo` in one browser tab and `http://localhost:5173/protection` in another. Trigger a Prompt Injection attack in NovaTrust and watch the incident card immediately pop up in Agent Watch with instant analyst override controls!
+
 
 ---
 
@@ -475,6 +565,7 @@ The CI workflow in [`.github/workflows/product-safety.yml`](.github/workflows/pr
 
 ```text
 Project_NeuroSOC/
+├── docs/                  # Master production plan, feature catalog & persona guides
 ├── ingestion-service/     # PCAP / NetFlow / bank-portal event intake → Kafka
 ├── feature-service/       # 80-feature flow extraction + scaling
 ├── inference-service/     # FastAPI core: SNN, LNN, XGBoost, behavioral profiler,
@@ -510,20 +601,27 @@ Project_NeuroSOC/
 
 ---
 
-## 🗺️ Roadmap
+## 🗺️ Roadmap & Master Production Plan
 
-- [x] SNN + LNN + XGBoost hybrid detection
-- [x] Kafka streaming pipeline with versioned tenant events, idempotency IDs, fail-closed SASL/TLS client configuration, and infrastructure-managed shared topics
-- [x] Honeypot sandbox and feedback capture
-- [x] Analyst dashboard and NovaTrust bank simulation
-- [x] Keycloak OIDC, endpoint RBAC, admin-only model controls, audit log
-- [x] Analyst alert decisions, model candidate approval/promotion/rollback, and dashboard bearer-token wiring
-- [x] Per-alert feature explanations and Prometheus/Grafana overview
-- [x] Cross-replica API rate limits through Redis atomic counters; shared inference startup requires authenticated TLS Redis and fails closed on outage
-- [x] Tenant-scoped append-only audit hash chains with paginated admin/auditor export, per-page integrity checks, and atomic analyst decision recording
-- [~] OIDC, event, alert, profile, audit, rate-limit, and database query isolation carry tenant scope; production IdP lifecycle, per-source broker identity/ACL verification, cross-tenant model-training policy, external audit anchoring, retention policy, and restore rehearsal remain
-- [ ] Approved production dataset, model drift/fairness/adversarial evaluation, and reproducible training
-- [ ] SIEM/EDR/ticketing connectors, incident runbooks, backup/restore drills, and load/security rehearsal
+For the comprehensive engineering roadmap detailing current verified systems vs. future enterprise scale, see [`docs/PRODUCTION_PLAN.md`](docs/PRODUCTION_PLAN.md).
+
+### ✅ What is Already Built (Production Ready)
+- [x] **Tri-Model Neuromorphic Detection Core:** SNN (Norse LIF spike burst detection) + LNN (liquid state continuous tracking) + XGBoost with deterministic tree logic overrides.
+- [x] **Multi-Source Streaming Pipeline:** PCAP file streaming, NetFlow (UDP 2055), and Linux/Unix Syslog (RFC 3164/5424 UDP 5140) publishing versioned tenant-scoped events to Kafka.
+- [x] **80-Feature Extraction Engine:** Bidirectional TCP/UDP flows, 80 statistical flow features, 100k LRU table, and deterministic MinMax scaling.
+- [x] **Autonomous Deception Honeypot:** Stealth session diversion ($\ge 0.50$ confidence) to high-interaction sandbox (:8001) with decoy accounts, synthetic transfers, honey-vault, and canary tokens.
+- [x] **Closed-Loop Gated Retraining:** Feedback harvesting, fixed held-out regression benchmark evaluation, candidate staging, and audited 1-click promotion/rollback.
+- [x] **Analyst Cockpit & Bank Portal:** Real-time WebSocket alert feeds, interactive threat map, candidate promotion panel, and NovaTrust Bank dark fintech simulation application.
+- [x] **Enterprise Identity & Multi-Tenancy:** Keycloak OIDC with tenant claims, role-based access control, distributed Redis rate limiting, and PostgreSQL `verify-full` TLS enforcement.
+- [x] **Cryptographic Audit Hash Chain:** Append-only SHA-256 hash chains for all sensitive decisions, logins, and model changes, with paginated verification export.
+- [x] **Full Observability & Alerting:** Standardized Prometheus `/metrics` across all containers, pre-configured Grafana dashboards, automated alerting webhooks, and daily 06:00 SMTP executive digests.
+
+### 🔮 What is Planned for the Future
+- [ ] **Milestone 1: Production Datasets & Continuous Drift Benchmarking:** Full-scale CIC-IDS2017/2019 dataset provenance, automated feature drift detection (PSI), and adversarial perturbation benchmarking.
+- [ ] **Milestone 2: Cloud-Native Multi-Tenant Broker Isolation:** Automated per-tenant Kafka topic namespacing, dynamic SASL/mTLS certificate rotation, and neuromorphic edge hardware deployment (Loihi 2 / SynSense).
+- [ ] **Milestone 3: Cryptographic Audit Anchoring & WORM Compliance:** External RFC 3161 trusted timestamping authority or immutable ledger anchoring for daily audit chain tips; SOC 2 Type II and PCI-DSS 4.0 evidence automation.
+- [ ] **Milestone 4: Enterprise SIEM, SOAR & EDR Ecosystem Connectors:** Bi-directional integrations with Splunk HEC, Microsoft Sentinel, Palo Alto Cortex XSOAR, and CrowdStrike Falcon process telemetry.
+- [ ] **Milestone 5: Autonomous Runbooks & Chaos Drills:** Automated containment playbooks, weekly broker/database chaos engineering drills, and multi-region disaster recovery runbooks.
 
 ---
 
