@@ -7,19 +7,21 @@ from pathlib import Path
 import numpy as np
 import torch
 from sklearn.metrics import accuracy_score, f1_score
-from sklearn.preprocessing import LabelEncoder
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from common import (
+    ClassOrderEncoder,
     CLASS_NAMES,
     DATASET_TRAIN_PATH,
     MODEL_VERSION_PATH,
     add_inference_service_to_path,
+    balanced_class_weights,
     candidate_artifact_path,
     generate_synthetic_dataset,
     load_tabular_dataset,
     make_sliding_windows,
+    subsample_stratified,
     train_val_split,
     write_model_candidate,
 )
@@ -47,6 +49,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reservoir-size", type=int, default=500)
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--smoke-test", action="store_true")
+    parser.add_argument(
+        "--sequence-dataset",
+        type=Path,
+        default=None,
+        help="sequences.npz from datasets/build_sequences.py (real windows, block-level train/test split).",
+    )
+    parser.add_argument("--max-rows", type=int, default=0, help="Stratified row cap before windowing (0 = all).")
+    parser.add_argument("--class-weight", action="store_true", help="Weight the loss by inverse class frequency.")
     return parser.parse_args()
 
 
@@ -80,11 +90,22 @@ def evaluate(
 def main() -> int:
     args = parse_args()
     device = torch.device(args.device)
-    features, labels, feature_names = prepare_dataset(args)
-    windows, window_labels = make_sliding_windows(features, labels, window_size=args.window_size)
-    x_train, x_val, y_train, y_val = train_val_split(windows, window_labels)
+    if args.sequence_dataset is not None and not args.smoke_test:
+        with np.load(args.sequence_dataset, allow_pickle=False) as data:
+            x_train, y_train = data["x_train"], data["y_train"]
+            x_val, y_val = data["x_test"], data["y_test"]
+            feature_names = [str(name) for name in data["feature_names"]]
+            args.window_size = int(data["window_size"])
+        if args.max_rows:
+            x_train, y_train = subsample_stratified(x_train, y_train, args.max_rows)
+        print(f"[INFO] Loaded sequences {args.sequence_dataset}: train {x_train.shape}, val {x_val.shape}")
+    else:
+        features, labels, feature_names = prepare_dataset(args)
+        features, labels = subsample_stratified(features, labels, args.max_rows)
+        windows, window_labels = make_sliding_windows(features, labels, window_size=args.window_size)
+        x_train, x_val, y_train, y_val = train_val_split(windows, window_labels)
 
-    label_encoder = LabelEncoder()
+    label_encoder = ClassOrderEncoder()
     label_encoder.fit(CLASS_NAMES)
     y_train_encoded = label_encoder.transform(y_train)
     y_val_encoded = label_encoder.transform(y_val)
@@ -107,7 +128,10 @@ def main() -> int:
 
     classifier = LNNClassifier(reservoir_size=reservoir.reservoir_size).to(device)
     optimizer = torch.optim.Adam(classifier.parameters(), lr=args.lr)
-    criterion = nn.CrossEntropyLoss()
+    class_weight = None
+    if args.class_weight:
+        class_weight = torch.tensor(balanced_class_weights(y_train_encoded, len(CLASS_NAMES)), device=device)
+    criterion = nn.CrossEntropyLoss(weight=class_weight)
 
     best_f1 = -1.0
     best_payload: dict | None = None

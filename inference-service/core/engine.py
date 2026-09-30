@@ -419,6 +419,16 @@ class DecisionEngine:
                         dtype=np.float32,
                     )[0]
                     predicted_label, threat_confidence = self._label_and_threat_confidence(probabilities)
+                elif getattr(self.xgb_model, "scaler", None) is not None:
+                    # Model with its own column subset and scaler: needs the live raw vector. Without
+                    # one there is nothing valid to feed it, so fall through to the heuristic.
+                    if raw_feature_vector is None:
+                        raise RuntimeError("No raw features available for a model that scales its own inputs.")
+                    probabilities = np.asarray(
+                        self.xgb_model.predict_proba_from_raw(raw_feature_vector, self.feature_names),
+                        dtype=np.float32,
+                    )[0]
+                    predicted_label, threat_confidence = self._label_and_threat_confidence(probabilities)
                 elif hasattr(self.xgb_model, "predict_proba"):
                     probabilities = np.asarray(
                         self.xgb_model.predict_proba(feature_vector.reshape(1, -1)),

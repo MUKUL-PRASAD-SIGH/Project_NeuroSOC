@@ -10,19 +10,21 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from sklearn.metrics import ConfusionMatrixDisplay, accuracy_score, f1_score
-from sklearn.preprocessing import LabelEncoder
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from common import (
+    ClassOrderEncoder,
     CLASS_NAMES,
     DATASET_TRAIN_PATH,
     MODEL_VERSION_PATH,
     RESULTS_DIR,
     add_inference_service_to_path,
+    balanced_class_weights,
     candidate_artifact_path,
     generate_synthetic_dataset,
     load_tabular_dataset,
+    subsample_stratified,
     train_val_split,
     write_model_candidate,
 )
@@ -50,6 +52,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument("--timesteps", type=int, default=100)
+    parser.add_argument("--max-rows", type=int, default=0, help="Stratified row cap (0 = all).")
+    parser.add_argument("--class-weight", action="store_true", help="Weight the loss by inverse class frequency.")
     return parser.parse_args()
 
 
@@ -83,12 +87,13 @@ def save_confusion_matrix(
     y_true: np.ndarray,
     y_pred: np.ndarray,
     path: Path,
-    label_encoder: LabelEncoder,
+    label_encoder: ClassOrderEncoder,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     display = ConfusionMatrixDisplay.from_predictions(
         y_true,
         y_pred,
+        labels=np.arange(len(label_encoder.classes_)),
         display_labels=label_encoder.classes_,
         xticks_rotation=45,
         colorbar=False,
@@ -102,9 +107,10 @@ def main() -> int:
     args = parse_args()
     device = torch.device(args.device)
     features, labels, feature_names = prepare_dataset(args)
+    features, labels = subsample_stratified(features, labels, args.max_rows)
     x_train, x_val, y_train, y_val = train_val_split(features, labels)
 
-    label_encoder = LabelEncoder()
+    label_encoder = ClassOrderEncoder()
     label_encoder.fit(CLASS_NAMES)
     y_train_encoded = label_encoder.transform(y_train)
     y_val_encoded = label_encoder.transform(y_val)
@@ -122,7 +128,10 @@ def main() -> int:
     encoder = SpikeEncoder(n_features=x_train.shape[1], T=args.timesteps)
     model = SNNAnomalyDetector(input_size=encoder.input_size).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    criterion = nn.CrossEntropyLoss()
+    class_weight = None
+    if args.class_weight:
+        class_weight = torch.tensor(balanced_class_weights(y_train_encoded, len(CLASS_NAMES)), device=device)
+    criterion = nn.CrossEntropyLoss(weight=class_weight)
 
     best_state: dict | None = None
     best_f1 = -1.0
