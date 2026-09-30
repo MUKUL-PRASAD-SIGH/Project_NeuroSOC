@@ -100,6 +100,23 @@ Actions come from the fixed list in [`schemas/taxonomy.json`](../schemas/taxonom
 ## Build and test
 
 ```bash
-cd sdk/js && npm install && npm run build && npm test     # dist/neurosoc.min.js, ~4 KB gzipped
+cd sdk/js && npm install && npm run build && npm test     # dist/neurosoc.min.js, under 5 KB gzipped
 pytest tests/test_python_sdk.py tests/test_universal_*.py  # from the repo root
 ```
+
+## Releasing
+
+Both packages publish from a GitHub tag through trusted publishing, so no registry token is stored in the repo. A published version can never be reused, so bump it first.
+
+| Package | Bump | Tag |
+| --- | --- | --- |
+| `neurosoc` (PyPI) | `version` in `python/pyproject.toml` and `__version__` in `python/neurosoc/__init__.py` | `git tag sdk-py-v0.1.1 && git push origin sdk-py-v0.1.1` |
+| `@neurosoc/sdk` (npm) | `version` in `js/package.json` | `git tag sdk-js-v0.1.1 && git push origin sdk-js-v0.1.1` |
+
+Each workflow checks the tag matches the version, runs the tests and build, then publishes.
+
+**npm, one-time setup.** npm only connects GitHub Actions to a package that already exists, so the first version is published by hand:
+
+1. Create an npm account (with two-factor authentication) and the free `neurosoc` organization at https://www.npmjs.com/org/create. The `@neurosoc/` scope belongs to that organization.
+2. From `sdk/js`: `npm login`, `npm ci`, `npm publish` (it builds and tests first, and is public by default).
+3. On https://www.npmjs.com/package/@neurosoc/sdk/access, add a **Trusted Publisher**: GitHub Actions, owner `MUKUL-PRASAD-SIGH`, repository `Project_NeuroSOC`, workflow `publish-js-sdk.yml`, environment `npm`. Then set publishing access to require two-factor authentication and disallow tokens, so only the workflow can publish.
