@@ -1,30 +1,70 @@
 import type { BrowserVerdict, SdkEvent, SiteConfig } from "./types";
 
+/** Sends one request to the NeuroSOC API and returns the parsed JSON body (or throws). */
+export type Sender = (path: string, body?: string) => Promise<unknown>;
+
 /**
- * Batches events and posts them as a CORS "simple request" (text/plain body, key in the URL):
- * no preflight round trip, and the same request works from navigator.sendBeacon on page close.
+ * Default sender: a CORS "simple request" (text/plain body, key in the URL), so there is no
+ * preflight round trip, and the same request also works from navigator.sendBeacon on page close.
  */
+export function fetchSender(endpoint: string, key: string): Sender {
+  return async (path, body) => {
+    const url = `${endpoint.replace(/\/$/, "")}${path}?key=${encodeURIComponent(key)}`;
+    const response = await fetch(url, body === undefined ? { credentials: "omit" } : {
+      method: "POST",
+      credentials: "omit",
+      headers: { "Content-Type": "text/plain;charset=UTF-8" },
+      body,
+      keepalive: body.length < 60_000,
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.json();
+  };
+}
+
+/**
+ * Relay sender for the Lens extension: pages with a strict Content Security Policy block calls to
+ * other hosts, so the SDK hands each request to the extension (window.postMessage), whose
+ * background worker makes the call and posts the answer back.
+ */
+export function relaySender(): Sender {
+  let counter = 0;
+  const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+  window.addEventListener("message", (event) => {
+    const data = event.data as { __neurosoc_reply?: string; ok?: boolean; body?: unknown; error?: string };
+    if (event.source !== window || !data?.__neurosoc_reply) return;
+    const waiter = pending.get(data.__neurosoc_reply);
+    if (!waiter) return;
+    pending.delete(data.__neurosoc_reply);
+    if (data.ok) waiter.resolve(data.body);
+    else waiter.reject(new Error(data.error || "relay failed"));
+  });
+  return (path, body) => new Promise((resolve, reject) => {
+    const id = `nsoc_${Date.now()}_${counter++}`;
+    pending.set(id, { resolve, reject });
+    window.postMessage({ __neurosoc_request: id, path, body }, window.location.origin);
+    setTimeout(() => {
+      if (pending.delete(id)) reject(new Error("relay timed out"));
+    }, 10_000);
+  });
+}
+
 export class Transport {
   private queue: Array<{ event: SdkEvent; resolve: (v: BrowserVerdict | null) => void }> = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
-    private endpoint: string,
-    private key: string,
+    private sender: Sender,
+    private beaconUrl: string | null,
     private flushIntervalMs: number,
     private maxBatch: number,
     private onVerdicts: (verdicts: BrowserVerdict[]) => void,
     private debug: boolean,
   ) {}
 
-  private url(path: string): string {
-    return `${this.endpoint.replace(/\/$/, "")}${path}?key=${encodeURIComponent(this.key)}`;
-  }
-
   async config(): Promise<SiteConfig | null> {
     try {
-      const response = await fetch(this.url("/api/v1/sdk/config"), { credentials: "omit" });
-      return response.ok ? ((await response.json()) as SiteConfig) : null;
+      return (await this.sender("/api/v1/sdk/config")) as SiteConfig;
     } catch {
       return null;
     }
@@ -47,15 +87,8 @@ export class Transport {
     while (this.queue.length) {
       const batch = this.queue.splice(0, this.maxBatch);
       try {
-        const response = await fetch(this.url("/api/v1/sdk/events"), {
-          method: "POST",
-          credentials: "omit",
-          headers: { "Content-Type": "text/plain;charset=UTF-8" },
-          body: JSON.stringify({ events: batch.map((item) => item.event) }),
-          keepalive: batch.length < 10,
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const body = (await response.json()) as { verdicts: BrowserVerdict[] };
+        const body = (await this.sender("/api/v1/sdk/events",
+          JSON.stringify({ events: batch.map((item) => item.event) }))) as { verdicts: BrowserVerdict[] };
         const byEvent = new Map(body.verdicts.map((v) => [v.event_id, v]));
         batch.forEach((item) => item.resolve(byEvent.get(item.event.event_id) ?? null));
         this.onVerdicts(body.verdicts);
@@ -69,10 +102,13 @@ export class Transport {
   /** Last-chance delivery when the page is hidden or closed. */
   beacon(): void {
     if (!this.queue.length) return;
+    if (!this.beaconUrl || typeof navigator.sendBeacon !== "function") {
+      void this.flush();
+      return;
+    }
     const batch = this.queue.splice(0, this.maxBatch);
     const body = JSON.stringify({ events: batch.map((item) => item.event) });
-    const sent = typeof navigator.sendBeacon === "function" &&
-      navigator.sendBeacon(this.url("/api/v1/sdk/events"), new Blob([body], { type: "text/plain;charset=UTF-8" }));
+    const sent = navigator.sendBeacon(this.beaconUrl, new Blob([body], { type: "text/plain;charset=UTF-8" }));
     batch.forEach((item) => item.resolve(null));
     if (!sent && this.debug) console.warn("[neurosoc] beacon was not accepted");
   }

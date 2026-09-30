@@ -22,11 +22,13 @@ MAX_REASONS = 4
 
 def reasons(detector_reasons: list[str], features: dict[str, float], z: dict[str, float]) -> list[str]:
     out = list(detector_reasons)
+    already = " ".join(detector_reasons).lower()
     for name, score in sorted(z.items(), key=lambda item: -abs(item[1])):
-        if abs(score) < 3.0 or name not in FEATURE_WORDS:
+        if abs(score) < 3.0 or name not in FEATURE_WORDS or FEATURE_WORDS[name] in already:
             continue
         direction = "above" if score > 0 else "below"
-        out.append(f"{FEATURE_WORDS[name]} is {abs(score):.0f} standard deviations {direction} its usual")
+        size = "far" if abs(score) > 50 else f"{abs(score):.0f} standard deviations"
+        out.append(f"{FEATURE_WORDS[name]} is {size} {direction} its usual")
     for name, sentence in FLAG_WORDS.items():
         if features.get(name, 0.0) > 0:
             out.append(sentence)

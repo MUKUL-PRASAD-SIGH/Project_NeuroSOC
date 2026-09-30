@@ -1,10 +1,42 @@
 {
   "name": "Example rewards campaign",
-  "description": "Rules for sdk/examples/rewards-campaign, the reference integration and the bot-farm demo target.",
+  "description": "Rules for sdk/examples/rewards-campaign, the reference integration and the bot-farm demo target. The claim itself is sent by the page with guard() so the backend check always sees its verdict.",
   "rules": [
-    { "match": { "url": "*", "event": "click", "selector": "#connect-wallet" }, "action": "wallet.connect", "resource": { "type": "campaign", "id_from": "attr:data-campaign" } },
-    { "match": { "url": "*", "event": "click", "selector": "[data-task]" }, "action": "task.complete", "resource": { "type": "campaign", "id_from": "attr:data-campaign" } },
-    { "match": { "url": "*", "event": "submit", "selector": "#profile-form" }, "action": "campaign.join", "resource": { "type": "campaign", "id_from": "attr:data-campaign" } },
-    { "match": { "url": "*", "event": "click", "selector": "#claim" }, "action": "reward.claim", "resource": { "type": "campaign", "id_from": "attr:data-campaign", "sensitivity": "medium" }, "value_from": "attr:data-reward" }
+    {
+      "match": {
+        "url": "*",
+        "event": "click",
+        "selector": "#connect-wallet"
+      },
+      "action": "wallet.connect",
+      "resource": {
+        "type": "campaign",
+        "id_from": "attr:data-campaign"
+      }
+    },
+    {
+      "match": {
+        "url": "*",
+        "event": "click",
+        "selector": "[data-task]"
+      },
+      "action": "task.complete",
+      "resource": {
+        "type": "campaign",
+        "id_from": "attr:data-campaign"
+      }
+    },
+    {
+      "match": {
+        "url": "*",
+        "event": "submit",
+        "selector": "#profile-form"
+      },
+      "action": "campaign.join",
+      "resource": {
+        "type": "campaign",
+        "id_from": "attr:data-campaign"
+      }
+    }
   ]
 }

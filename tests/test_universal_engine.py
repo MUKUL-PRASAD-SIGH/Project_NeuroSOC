@@ -233,3 +233,45 @@ def test_tenants_are_isolated(engine):
     verdict = engine.process(other)
     assert verdict["verdict"] == "ok"
     assert engine.session_verdict("other-tenant", "session-z-1")["verdict"] == "ok"
+
+
+def _replay(engine: UniversalEngine, people: int, bots: int) -> tuple[list, list]:
+    """Drive the demo simulators (attack_patterns/neurosoc_sim.py) through the engine directly."""
+    sys.path.insert(0, str(REPO_ROOT / "attack_patterns"))
+    import neurosoc_sim as sim
+
+    flagged_people, flagged_bots, current = [], [], {"list": None}
+
+    def send(events, *args, **kwargs):
+        for raw in events:
+            event = normalize(SdkEvent.model_validate(raw), site=SITE, client_ip="127.0.0.1",
+                              origin=sim.CAMPAIGN_ORIGIN, hash_secret="test-secret", source="sdk-js")
+            verdict = engine.process(event)
+            if verdict["verdict"] != "ok":
+                current["list"].append((raw["entity"]["id"], raw["action"], verdict["verdict"], verdict["reasons"]))
+        return []
+
+    original_send, original_post = sim.send, sim.post
+    sim.send, sim.post = send, (lambda *args, **kwargs: {})
+    try:
+        current["list"] = flagged_people
+        for index in range(people):
+            rng = random.Random(1000 + index)
+            context = {"device_hash": sim.fingerprint(f"person-{index}-device")}
+            sim.campaign_run(sim.wallet_address(rng), sim.new_session(), context, lambda r=rng: sim.human_telemetry(r))
+        current["list"] = flagged_bots
+        for index in range(bots):
+            rng = random.Random(9000 + index)
+            context = {"device_hash": sim.fingerprint("farm-rig-01")}
+            sim.campaign_run(sim.wallet_address(rng), sim.new_session(), context, sim.bot_telemetry)
+    finally:
+        sim.send, sim.post = original_send, original_post
+    return flagged_people, flagged_bots
+
+
+def test_sixty_people_on_one_ip_block_are_never_flagged_and_a_farm_is(engine):
+    # Everyone shares 127.0.0.1 here, the worst case for the weak IP-block link.
+    flagged_people, flagged_bots = _replay(engine, people=60, bots=30)
+    assert flagged_people == []
+    claims = {entity for entity, action, verdict, _ in flagged_bots if action == "reward.claim"}
+    assert len(claims) == 30, "every bot's claim is withheld"

@@ -159,7 +159,7 @@ def test_config_serves_mode_and_rules(setup):
     client, pk = setup["client"], setup["site"]["publishable_key"]
     config = client.get(f"/api/v1/sdk/config?key={pk}", headers={"Origin": SITE_ORIGIN}).json()
     assert config["mode"] == "enforce"
-    assert any(rule["action"] == "reward.claim" for rule in config["rules"])
+    assert any(rule["action"] == "task.complete" for rule in config["rules"])
 
 
 def test_invalid_events_are_rejected(setup):
@@ -217,3 +217,16 @@ def test_main_exposes_no_sdk_routes_when_flag_is_off():
     assert inference_main.ENABLE_UNIVERSAL_ENGINE is False
     paths = {getattr(route, "path", "") for route in inference_main.app.routes}
     assert not any(path.startswith(("/api/v1/sdk", "/api/v1/universal")) for path in paths)
+
+
+def test_extension_origins_need_an_explicit_opt_in(setup):
+    client, registry = setup["client"], setup["registry"]
+    lens_site, _ = registry.create("local", "Observed site", ["https://observed.example", "chrome-extension://*"])
+    extension = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+    ok = client.post(f"/api/v1/sdk/events?key={lens_site['publishable_key']}", json={"events": [_claim()]},
+                     headers={"Origin": extension})
+    assert ok.status_code == 200
+    # The example site did not opt in, so the extension cannot use its key.
+    denied = client.post(f"/api/v1/sdk/events?key={setup['site']['publishable_key']}", json={"events": [_claim()]},
+                         headers={"Origin": extension})
+    assert denied.status_code == 403

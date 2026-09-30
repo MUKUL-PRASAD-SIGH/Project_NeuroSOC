@@ -1,4 +1,9 @@
-"""Running per-feature baselines (Welford mean/variance) for entities and entity groups."""
+"""Running per-feature baselines (Welford mean/variance) for entities and entity groups.
+
+Each feature keeps its own count, because not every event carries every feature: an amount only
+exists on events that move value, so a claim of 25 is compared with earlier amounts, never with
+the zero-value page views and task completions around it.
+"""
 
 from __future__ import annotations
 
@@ -17,19 +22,22 @@ STD_FLOOR = {
     "value_amount": 1.0,
 }
 BASELINE_FEATURES = tuple(STD_FLOOR)
-MIN_HISTORY = 20  # events before an entity's own baseline replaces its group's
+MIN_HISTORY = 20       # events before an entity's own baseline replaces its group's
+MIN_OBSERVATIONS = 5   # observations of a feature before it is scored against the baseline
 
 
 def empty() -> dict[str, Any]:
-    return {"n": 0, "mean": {}, "m2": {}}
+    return {"n": 0, "count": {}, "mean": {}, "m2": {}}
 
 
 def update(state: dict[str, Any], features: dict[str, float]) -> dict[str, Any]:
     state["n"] = int(state.get("n", 0)) + 1
-    n = state["n"]
+    counts = state.setdefault("count", {})
     for name in BASELINE_FEATURES:
         if name not in features:
             continue
+        n = int(counts.get(name, 0)) + 1
+        counts[name] = n
         x = float(features[name])
         mean = float(state["mean"].get(name, 0.0))
         delta = x - mean
@@ -40,12 +48,11 @@ def update(state: dict[str, Any], features: dict[str, float]) -> dict[str, Any]:
 
 
 def zscores(state: dict[str, Any], features: dict[str, float]) -> dict[str, float]:
-    n = int(state.get("n", 0))
-    if n < 2:
-        return {}
+    counts = state.get("count", {})
     scores: dict[str, float] = {}
     for name in BASELINE_FEATURES:
-        if name not in features or name not in state["mean"]:
+        n = int(counts.get(name, 0))
+        if name not in features or n < MIN_OBSERVATIONS:
             continue
         variance = float(state["m2"].get(name, 0.0)) / (n - 1)
         std = max(math.sqrt(max(variance, 0.0)), STD_FLOOR[name])

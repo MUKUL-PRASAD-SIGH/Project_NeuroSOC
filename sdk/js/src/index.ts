@@ -1,7 +1,7 @@
 import { deviceHash, newEventId, sessionId, userAgentHash, visitorId } from "./identity";
 import { findRule, toTrackInput } from "./rules";
 import { Telemetry } from "./telemetry";
-import { Transport } from "./transport";
+import { Transport, fetchSender, relaySender } from "./transport";
 import type { BrowserVerdict, Entity, InitOptions, Rule, SdkEvent, TrackInput } from "./types";
 import { watchWallets } from "./wallet";
 
@@ -32,8 +32,12 @@ export class NeuroSOC {
     this.sessionId = sessionId();
     this.entity = { id: visitorId(), type: "human" };
     this.consented = !options.waitForConsent;
-    this.transport = new Transport(options.endpoint, options.publishableKey, options.flushIntervalMs,
-      options.maxBatch, (verdicts) => verdicts.forEach((v) => this.listeners.forEach((l) => l(v))), options.debug);
+    const beaconUrl = options.relay ? null
+      : `${options.endpoint.replace(/\/$/, "")}/api/v1/sdk/events?key=${encodeURIComponent(options.publishableKey)}`;
+    this.transport = new Transport(
+      options.relay ? relaySender() : fetchSender(options.endpoint, options.publishableKey), beaconUrl,
+      options.flushIntervalMs, options.maxBatch,
+      (verdicts) => verdicts.forEach((v) => this.listeners.forEach((l) => l(v))), options.debug);
     this.contextReady = Promise.all([deviceHash(), userAgentHash()])
       .then(([device, ua]) => { this.context.device_hash = device; this.context.user_agent_hash = ua; })
       .catch(() => undefined);
@@ -44,7 +48,7 @@ export class NeuroSOC {
     if (!options.endpoint) throw new Error("NeuroSOC: endpoint is required.");
     const client = new NeuroSOC({
       captureBehavior: true, autoCapture: true, tagForms: true, waitForConsent: false,
-      flushIntervalMs: 2000, maxBatch: 20, debug: false, ...options,
+      flushIntervalMs: 2000, maxBatch: 20, debug: false, relay: false, ...options,
     });
     if (client.consented) client.start();
     return client;
@@ -90,7 +94,7 @@ export class NeuroSOC {
   // ── internals ─────────────────────────────────────────────────────────────
   private buildEvent(input: TrackInput): SdkEvent {
     const entity = input.entity ? { id: input.entity.id, type: input.entity.type ?? "human" } : this.entity;
-    const context: Record<string, string> = { ...this.context, page: location.pathname.slice(0, 256) };
+    const context: Record<string, string> = { ...this.context, page: location.pathname.slice(0, 256), page_origin: location.origin };
     if (this.wallet) context.wallet = this.wallet;
     if (input.context) Object.entries(input.context).forEach(([k, v]) => { if (v) context[k] = String(v); });
     const event: SdkEvent = {

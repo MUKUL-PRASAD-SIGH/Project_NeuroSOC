@@ -35,7 +35,8 @@ def evaluate(event: dict[str, Any], features: dict[str, float], z: dict[str, flo
     value_z = z.get("value_amount", 0.0)
     if moves_value and value_z >= VALUE_Z_THRESHOLD:
         risk += 0.35
-        reasons.append(f"amount {value.get('amount')} is {value_z:.0f} standard deviations above its usual")
+        size = "far above" if value_z > 50 else f"{value_z:.0f} standard deviations above"
+        reasons.append(f"amount {float(value.get('amount') or 0):,.2f} is {size} its usual")
     if moves_value and agent.get("instruction_source") == "external_content":
         risk += 0.3
         reasons.append("the instruction came from outside content, not the agent's owner")

@@ -109,7 +109,7 @@ def compute(state: dict[str, Any], event: dict[str, Any], group_transitions: dic
     def novel(kind: str, item: str | None) -> float:
         return 1.0 if has_history and item and item not in seen[kind] else 0.0
 
-    return {
+    features = {
         "event_rate_1m": float(sum(1 for e in history if now - e[0] <= 60) + 1),
         "event_rate_1h": float(len(last_hour) + 1),
         "burstiness": (std_gap - mean_gap) / (std_gap + mean_gap) if (std_gap + mean_gap) > 0 else 0.0,
@@ -129,12 +129,15 @@ def compute(state: dict[str, Any], event: dict[str, Any], group_transitions: dic
         "fan_out_1h": float(len(destinations_1h)),
         "privilege_delta": float(max(sensitivity_rank(resource.get("sensitivity")) - state["max_sensitivity"], 0))
         if has_history else 0.0,
-        "value_amount": float(value.get("amount") or 0.0),
         "off_hours": off_hours,
         "geo_change": 1.0 if has_history and geo and state["last"]["geo"] and geo != state["last"]["geo"] else 0.0,
         "device_change": 1.0 if has_history and device and state["last"]["device"] and device != state["last"]["device"] else 0.0,
         "cold_start": 0.0 if has_history else 1.0,
     }
+    # Only events that move value carry an amount; the baseline compares amounts with amounts.
+    if value.get("amount") is not None:
+        features["value_amount"] = float(value["amount"])
+    return features
 
 
 def _remember_seen(seen: list[str], item: str | None) -> None:

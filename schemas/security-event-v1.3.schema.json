@@ -486,6 +486,13 @@
                 "null"
               ],
               "maxLength": 256
+            },
+            "page_origin": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256
             }
           }
         },

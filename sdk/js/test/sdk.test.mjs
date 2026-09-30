@@ -42,7 +42,10 @@ function setup({ rules, verdictAction = "allow" } = {}) {
 
 const tick = (ms = 20) => new Promise((resolve) => setTimeout(resolve, ms));
 const preset = JSON.parse(await (await import("node:fs/promises")).readFile(
-  new URL("../../presets/rewards-campaign.json", import.meta.url), "utf8")).rules;
+  new URL("../../presets/rewards-campaign.json", import.meta.url), "utf8")).rules.concat([
+  // The example page sends its claim with guard(); a rule-driven claim is tested here too.
+  { match: { url: "*", event: "click", selector: "#claim" }, action: "reward.claim",
+    resource: { type: "campaign", id_from: "attr:data-campaign", sensitivity: "medium" }, value_from: "attr:data-reward" }]);
 
 test("script-tag style init sends session.start and page.view without preflight headers", async () => {
   const { sent } = setup({ rules: preset });

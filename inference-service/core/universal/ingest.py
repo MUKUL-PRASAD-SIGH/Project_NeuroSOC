@@ -66,6 +66,7 @@ class SdkContext(_Strict):
     funded_by: str | None = Field(default=None, max_length=128)
     geo: str | None = Field(default=None, max_length=8)
     page: str | None = Field(default=None, max_length=256)
+    page_origin: str | None = Field(default=None, max_length=256)
 
 
 class SdkTelemetryEvent(BaseModel):

@@ -21,7 +21,7 @@ import numpy as np
 from .store import get_json, set_json
 
 FARM_MIN_SIZE = 5
-TIMING_MAX_RELATIVE_DIFF = 0.03
+TIMING_MAX_RELATIVE_DIFF = 0.02
 PARTICIPANT_LIMIT = 500
 INDEX_TTL = 7 * 24 * 3600
 STRONG_KINDS = ("device_hash", "funded_by")
@@ -57,10 +57,14 @@ def record(kv: Any, tenant: str, entity_id: str, resource_id: str, context: dict
 
 
 def near_identical(a: np.ndarray, b: np.ndarray) -> bool:
-    """Input-timing statistics that match to within a few percent on every dimension on average:
-    what one script replayed across accounts produces, and what two people almost never do."""
-    relative = np.abs(a - b) / (np.abs(a) + np.abs(b) + 1e-6)
-    return float(relative.mean()) <= TIMING_MAX_RELATIVE_DIFF
+    """Input-timing statistics that match within a couple of percent on every measured dimension:
+    what one script replayed across accounts produces. People with similar typing speed can agree
+    on average, but not on all twenty statistics at once, so the check uses the worst dimension."""
+    measured = (np.abs(a) + np.abs(b)) > 1e-6
+    if int(measured.sum()) < 6:
+        return False  # too little input to compare fairly
+    relative = np.abs(a - b)[measured] / (np.abs(a) + np.abs(b))[measured]
+    return float(relative.max()) <= TIMING_MAX_RELATIVE_DIFF
 
 
 def cluster(kv: Any, tenant: str, entity_id: str, resource_id: str) -> dict[str, Any]:

@@ -41,8 +41,17 @@ def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+EXTENSION_WILDCARD = "chrome-extension://*"
+
+
 def canonical_origin(value: str) -> str | None:
-    parsed = urlsplit(value.strip())
+    value = value.strip()
+    if value == EXTENSION_WILDCARD:
+        return value
+    if value.startswith("chrome-extension://"):
+        extension_id = value[len("chrome-extension://"):].rstrip("/")
+        return value.rstrip("/") if extension_id.isalnum() else None
+    parsed = urlsplit(value)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         return None
     port = f":{parsed.port}" if parsed.port else ""
@@ -90,7 +99,13 @@ class SiteRegistry:
     @staticmethod
     def origin_allowed(site: dict[str, Any], origin: str | None) -> bool:
         canonical = canonical_origin(origin or "")
-        return bool(canonical) and canonical in site.get("allowed_origins", [])
+        allowed = site.get("allowed_origins", [])
+        if not canonical:
+            return False
+        # A site may opt in to the NeuroSOC Lens extension (observe-only demos on sites we do not own).
+        if canonical.startswith("chrome-extension://") and EXTENSION_WILDCARD in allowed:
+            return True
+        return canonical in allowed
 
     @staticmethod
     def public_view(site: dict[str, Any]) -> dict[str, Any]:

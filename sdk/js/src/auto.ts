@@ -7,7 +7,7 @@ declare global {
   interface Window {
     NeuroSOC?: typeof NeuroSOC;
     neurosoc?: NeuroSOC;
-    __NEUROSOC_CONFIG__?: { key: string; endpoint: string; debug?: boolean };
+    __NEUROSOC_CONFIG__?: { key: string; endpoint: string; debug?: boolean; relay?: boolean };
   }
 }
 
@@ -29,6 +29,7 @@ if (!window.neurosoc) {
         endpoint,
         waitForConsent: tag?.dataset.consent === "wait",
         debug: tag?.dataset.debug === "true" || Boolean(window.__NEUROSOC_CONFIG__?.debug),
+        relay: !tag && Boolean(window.__NEUROSOC_CONFIG__?.relay),
       });
     } catch (error) {
       console.warn("[neurosoc] not started:", error);

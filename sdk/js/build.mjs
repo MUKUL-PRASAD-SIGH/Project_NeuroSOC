@@ -1,6 +1,6 @@
 import { build } from "esbuild";
 import { gzipSync } from "node:zlib";
-import { readFileSync } from "node:fs";
+import { copyFileSync, readFileSync } from "node:fs";
 
 // npm / bundlers: tree-shakeable ES module, no side effects on import.
 await build({ entryPoints: ["src/index.ts"], outfile: "dist/index.mjs", bundle: true, format: "esm",
@@ -16,3 +16,6 @@ if (size > 15 * 1024) {
   console.error("Script bundle exceeds the 15 KB gzipped budget.");
   process.exit(1);
 }
+
+// The Lens extension ships the same bundle.
+copyFileSync("dist/neurosoc.min.js", "../extension/neurosoc.min.js");

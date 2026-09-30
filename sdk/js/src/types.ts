@@ -86,4 +86,6 @@ export interface InitOptions {
   flushIntervalMs?: number;
   maxBatch?: number;
   debug?: boolean;
+  /** Send through the Lens extension instead of fetch (pages whose CSP blocks outside hosts). */
+  relay?: boolean;
 }
