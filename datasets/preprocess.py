@@ -80,7 +80,34 @@ COLUMN_ALIASES = {
     "fwd_act_data_pkts": "act_data_pkt_fwd",
     "fwd_seg_size_min": "min_seg_size_fwd",
     "cwr_flag_count": "cwe_flag_count",
+    "flow_bytes_ss": "flow_bytes_per_s",
+    "flow_packets_ss": "flow_packets_per_s",
+    "fwd_packets_ss": "fwd_packets_per_s",
+    "bwd_packets_ss": "bwd_packets_per_s",
+    "down_sup_ratio": "down_up_ratio",
+    "fwd_packet_length_max": "fwd_pkt_len_max",
+    "fwd_packet_length_min": "fwd_pkt_len_min",
+    "fwd_packet_length_mean": "fwd_pkt_len_mean",
+    "fwd_packet_length_std": "fwd_pkt_len_std",
+    "bwd_packet_length_max": "bwd_pkt_len_max",
+    "bwd_packet_length_min": "bwd_pkt_len_min",
+    "bwd_packet_length_mean": "bwd_pkt_len_mean",
+    "bwd_packet_length_std": "bwd_pkt_len_std",
+    "min_packet_length": "pkt_len_min",
+    "max_packet_length": "pkt_len_max",
+    "packet_length_mean": "pkt_len_mean",
+    "packet_length_std": "pkt_len_std",
+    "init_win_bytes_forward": "init_win_bytes_fwd",
+    "init_win_bytes_backward": "init_win_bytes_bwd",
+    "min_seg_size_forward": "min_seg_size_fwd",
 }
+
+# Classes with too few rows to learn from; dropped instead of folded into OTHER.
+DROPPED_LABELS = {"infiltration", "heartbleed"}
+
+# Raw rows kept per (source file, raw label) while streaming, so large files
+# (CICDDoS2019 is ~21 GB) never have to fit in memory.
+DEFAULT_MAX_PER_FILE_LABEL = 15_000
 
 
 def parse_args() -> argparse.Namespace:
@@ -94,6 +121,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runtime-data-dir", type=Path, default=DEFAULT_RUNTIME_DATA_DIR)
     parser.add_argument("--contract-file", type=Path, default=None)
     parser.add_argument("--max-rows", type=int, default=DEFAULT_MAX_ROWS)
+    parser.add_argument(
+        "--max-per-file-label",
+        type=int,
+        default=DEFAULT_MAX_PER_FILE_LABEL,
+        help="Rows kept per (file, raw label) while streaming. 0 disables the cap.",
+    )
+    parser.add_argument(
+        "--write-runtime-copies",
+        action="store_true",
+        help="Also overwrite data/scaler.pkl and data/feature_columns.txt used by the live services.",
+    )
     parser.add_argument("--min-samples-per-class", type=int, default=1000)
     parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument("--random-state", type=int, default=DEFAULT_RANDOM_STATE)
@@ -128,7 +166,10 @@ def find_input_files(raw_dir: Path) -> list[Path]:
     files: list[Path] = []
     for pattern in patterns:
         files.extend(sorted(raw_dir.rglob(pattern)))
-    return files
+    empty = [path for path in files if path.stat().st_size == 0]
+    for path in empty:
+        print(f"[WARN] Skipping empty file {path}")
+    return [path for path in files if path not in empty]
 
 
 def iter_file_chunks(path: Path):
@@ -139,21 +180,9 @@ def iter_file_chunks(path: Path):
     if path.suffix.lower() == ".txt":
         read_kwargs["header"] = None
 
-    last_error: Exception | None = None
-    for encoding in ("utf-8", "latin-1"):
-        try:
-            reader = pd.read_csv(path, encoding=encoding, **read_kwargs)
-            for chunk in reader:
-                yield chunk
-            return
-        except UnicodeDecodeError as exc:
-            last_error = exc
-        except pd.errors.ParserError as exc:
-            last_error = exc
-            break
-
-    if last_error is not None:
-        raise last_error
+    # latin-1 never fails to decode. Trying utf-8 first could raise mid-file
+    # (CIC label columns contain invalid bytes) and re-yield already-read chunks.
+    yield from pd.read_csv(path, encoding="latin-1", **read_kwargs)
 
 
 def assign_default_headers(frame: pd.DataFrame) -> pd.DataFrame:
@@ -196,23 +225,63 @@ def locate_label_column(columns: list[str]) -> str | None:
     return None
 
 
-def map_label(value: object) -> str:
-    text = str(value).strip().lower()
+def map_label(value: object) -> str | None:
+    """Fold a raw dataset label into a NeuroSOC class; None means drop the row."""
+    text = re.sub(r"[^a-z0-9]+", " ", str(value).lower()).strip()
     if not text:
         return "OTHER"
-    if "ddos" in text or "dos" in text:
+    if text in {"benign", "normal"}:
+        return "BENIGN"
+    if text in DROPPED_LABELS:
+        return None
+    # CICDDoS2019 reflection attacks ("DrDoS_MSSQL", "DrDoS_SNMP", ...) are named
+    # after the abused service, so they must be caught before the keyword checks
+    # below ("sql" would otherwise make DrDoS_MSSQL a web attack).
+    if text.startswith("drdos"):
         return "DDOS"
-    if "brute" in text:
+    # Web checks come before brute force so "Web Attack - Brute Force" is a web
+    # attack, and before DoS so CICDDoS2019's "WebDDoS" is not a network flood.
+    if "web" in text or "xss" in text or "sql" in text or "injection" in text:
+        return "WEB_ATTACK"
+    if "brute" in text or "patator" in text:
         return "BRUTE_FORCE"
     if "scan" in text or "probe" in text or "recon" in text:
         return "RECONNAISSANCE"
-    if "xss" in text or "sql" in text or "web" in text or "injection" in text:
-        return "WEB_ATTACK"
     if "bot" in text:
         return "BOT"
-    if text in {"benign", "normal"}:
-        return "BENIGN"
+    if "dos" in text or text in {"syn", "tftp", "udp lag", "udplag"}:
+        return "DDOS"
     return "OTHER"
+
+
+def add_derived_features(frame: pd.DataFrame) -> pd.DataFrame:
+    """Fill contract features CIC does not ship but that follow from columns it does.
+
+    Formulas mirror feature-service/main.py.
+    """
+    def col(name: str) -> pd.Series | None:
+        return frame[name] if name in frame.columns else None
+
+    def numeric(name: str) -> pd.Series | None:
+        series = col(name)
+        return pd.to_numeric(series, errors="coerce") if series is not None else None
+
+    fwd, bwd = numeric("fwd_packets_total"), numeric("bwd_packets_total")
+    n_pkts = (fwd + bwd).replace(0, np.nan) if fwd is not None and bwd is not None else None
+
+    if "flow_iat_total" not in frame.columns and "flow_duration" in frame.columns:
+        frame["flow_iat_total"] = frame["flow_duration"]
+    if n_pkts is not None:
+        for source, target in (("syn_flag_count", "syn_ratio"), ("ack_flag_count", "ack_ratio")):
+            flags = numeric(source)
+            if target not in frame.columns and flags is not None:
+                frame[target] = flags / n_pkts
+        fwd_bytes, bwd_bytes = numeric("fwd_bytes_total"), numeric("bwd_bytes_total")
+        if "bytes_per_packet" not in frame.columns and fwd_bytes is not None and bwd_bytes is not None:
+            frame["bytes_per_packet"] = (fwd_bytes + bwd_bytes) / n_pkts
+    if "packet_size_variance" not in frame.columns and "pkt_len_variance" in frame.columns:
+        frame["packet_size_variance"] = frame["pkt_len_variance"]
+    return frame
 
 
 def preprocess_chunk(chunk: pd.DataFrame, source: Path) -> pd.DataFrame | None:
@@ -226,9 +295,16 @@ def preprocess_chunk(chunk: pd.DataFrame, source: Path) -> pd.DataFrame | None:
         print(f"[WARN] Skipping {source.name}: no label column found after normalization.")
         return None
 
-    labels = frame[label_column].map(map_label).astype(str)
-    frame = frame.drop(columns=[label_column], errors="ignore")
+    frame = add_derived_features(frame)
+    raw_labels = frame[label_column].astype(str).str.strip()
+    mapped = raw_labels.map(map_label)
+    keep = mapped.notna()
+    if not keep.any():
+        return None
+    frame = frame.loc[keep].drop(columns=[label_column], errors="ignore")
     frame = frame.drop(columns=["difficulty"], errors="ignore")
+    labels = mapped.loc[keep].astype(str)
+    raw_labels = raw_labels.loc[keep]
 
     numeric_frame = pd.DataFrame(index=frame.index)
     for column in frame.columns:
@@ -241,10 +317,21 @@ def preprocess_chunk(chunk: pd.DataFrame, source: Path) -> pd.DataFrame | None:
         return None
 
     numeric_frame["label"] = labels
+    numeric_frame["_raw_label"] = raw_labels
     return numeric_frame
 
 
-def load_raw_frames(raw_dir: Path) -> pd.DataFrame:
+def cap_per_raw_label(kept: dict[str, pd.DataFrame], processed: pd.DataFrame, cap: int, seed: int) -> None:
+    """Merge a chunk into `kept`, holding at most `cap` rows per raw label."""
+    for raw_label, group in processed.groupby("_raw_label", sort=False):
+        previous = kept.get(raw_label)
+        merged = group if previous is None else pd.concat([previous, group], ignore_index=True)
+        if cap > 0 and len(merged) > cap:
+            merged = merged.sample(n=cap, random_state=seed)
+        kept[raw_label] = merged
+
+
+def load_raw_frames(raw_dir: Path, max_per_file_label: int = 0, seed: int = DEFAULT_RANDOM_STATE) -> pd.DataFrame:
     input_files = find_input_files(raw_dir)
     if not input_files:
         raise FileNotFoundError(
@@ -252,22 +339,26 @@ def load_raw_frames(raw_dir: Path) -> pd.DataFrame:
             "Download the raw datasets into datasets/raw/ first."
         )
 
-    processed_chunks: list[pd.DataFrame] = []
+    file_frames: list[pd.DataFrame] = []
     for path in input_files:
         print(f"[INFO] Reading {path}")
-        chunk_count = 0
+        kept: dict[str, pd.DataFrame] = {}
         for chunk in iter_file_chunks(path):
             processed = preprocess_chunk(chunk, path)
             if processed is not None and not processed.empty:
-                processed_chunks.append(processed)
-                chunk_count += 1
-        if chunk_count == 0:
-            print(f"[WARN] No usable chunks were loaded from {path.name}")
+                cap_per_raw_label(kept, processed, max_per_file_label, seed)
+        if not kept:
+            print(f"[WARN] No usable rows were loaded from {path.name}")
+            continue
+        frame = pd.concat(kept.values(), ignore_index=True)
+        frame["_source"] = path.parent.name
+        file_frames.append(frame)
+        print(f"[INFO]   kept {len(frame)} rows: {frame['_raw_label'].value_counts().to_dict()}")
 
-    if not processed_chunks:
+    if not file_frames:
         raise ValueError("No usable labeled numeric data was found in datasets/raw/.")
 
-    return pd.concat(processed_chunks, ignore_index=True)
+    return pd.concat(file_frames, ignore_index=True)
 
 
 def print_distribution(title: str, labels: pd.Series) -> None:
@@ -323,12 +414,15 @@ def align_to_contract(frame: pd.DataFrame, contract_features: list[str]) -> tupl
         return aligned, discovered
 
     matched = [feature for feature in contract_features if feature in numeric.columns]
+    unmatched = [feature for feature in contract_features if feature not in numeric.columns]
     print(f"[INFO] Contract feature coverage: {len(matched)}/{len(contract_features)} columns matched from raw data.")
+    if unmatched:
+        print(f"[INFO] Dropping {len(unmatched)} contract features with no source in the datasets: {unmatched}")
 
-    aligned = numeric.reindex(columns=contract_features, fill_value=0.0)
+    aligned = numeric.reindex(columns=matched)
     aligned = aligned.apply(pd.to_numeric, errors="coerce").fillna(0.0)
     aligned["label"] = labels
-    return aligned, contract_features
+    return aligned, matched
 
 
 def oversample_with_replacement(
@@ -390,27 +484,31 @@ def balance_classes(
     return oversample_with_replacement(features, labels, targets, random_state)
 
 
-def save_feature_contract(feature_names: list[str], feature_columns_path: Path, runtime_data_dir: Path) -> None:
+def save_feature_contract(feature_names: list[str], feature_columns_path: Path, runtime_data_dir: Path | None) -> None:
     feature_columns_path.parent.mkdir(parents=True, exist_ok=True)
     feature_columns_path.write_text("\n".join(feature_names) + "\n", encoding="utf-8")
+    print(f"[INFO] Saved training feature contract to {feature_columns_path}")
+    if runtime_data_dir is None:
+        return
 
     runtime_data_dir.mkdir(parents=True, exist_ok=True)
     runtime_feature_columns_path = runtime_data_dir / "feature_columns.txt"
     runtime_feature_columns_path.write_text("\n".join(feature_names) + "\n", encoding="utf-8")
 
-    print(f"[INFO] Saved training feature contract to {feature_columns_path}")
     print(f"[INFO] Saved runtime feature contract to {runtime_feature_columns_path}")
 
 
-def save_scaler(scaler: MinMaxScaler, scaler_path: Path, runtime_data_dir: Path) -> None:
+def save_scaler(scaler: MinMaxScaler, scaler_path: Path, runtime_data_dir: Path | None) -> None:
     scaler_path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(scaler, scaler_path)
+    print(f"[INFO] Saved training scaler to {scaler_path}")
+    if runtime_data_dir is None:
+        return
 
     runtime_data_dir.mkdir(parents=True, exist_ok=True)
     runtime_scaler_path = runtime_data_dir / "scaler.pkl"
     joblib.dump(scaler, runtime_scaler_path)
 
-    print(f"[INFO] Saved training scaler to {scaler_path}")
     print(f"[INFO] Saved runtime scaler to {runtime_scaler_path}")
 
 
@@ -429,13 +527,17 @@ def main() -> int:
 
     try:
         contract_features = load_contract_features(args.contract_file)
-        raw_frame = load_raw_frames(args.raw_dir)
+        raw_frame = load_raw_frames(args.raw_dir, args.max_per_file_label, args.random_state)
     except FileNotFoundError as exc:
         print(f"[ERROR] {exc}")
         return 1
     except Exception as exc:
         print(f"[ERROR] Failed while loading raw datasets: {exc}")
         return 1
+
+    print("[INFO] Rows per source and class:")
+    print(pd.crosstab(raw_frame["_source"], raw_frame["label"]).to_string())
+    raw_frame = raw_frame.drop(columns=["_source", "_raw_label"])
 
     raw_frame = stratified_cap_rows(raw_frame, args.max_rows, args.random_state)
     print(f"[INFO] Combined usable rows: {len(raw_frame)}")
@@ -447,30 +549,35 @@ def main() -> int:
     features = aligned.drop(columns=["label"])
     labels = aligned["label"].astype(str)
 
-    scaler = MinMaxScaler()
-    scaled_array = scaler.fit_transform(features)
-    scaled_features = pd.DataFrame(scaled_array, columns=feature_names)
-
-    balanced_features, balanced_labels = balance_classes(
-        scaled_features,
-        labels,
-        args.min_samples_per_class,
-        args.random_state,
-    )
-    print_distribution("[INFO] Class distribution after balancing:", balanced_labels)
-
+    # Split first so neither the scaler nor the oversampler ever sees test rows.
     try:
-        ensure_split_is_feasible(balanced_labels, args.test_size)
-        x_train, x_test, y_train, y_test = train_test_split(
-            balanced_features,
-            balanced_labels,
+        ensure_split_is_feasible(labels, args.test_size)
+        x_train_raw, x_test_raw, y_train, y_test = train_test_split(
+            features,
+            labels,
             test_size=args.test_size,
-            stratify=balanced_labels,
+            stratify=labels,
             random_state=args.random_state,
         )
     except Exception as exc:
         print(f"[ERROR] Failed during train/test split: {exc}")
         return 1
+
+    scaler = MinMaxScaler()
+    x_train = pd.DataFrame(scaler.fit_transform(x_train_raw), columns=feature_names)
+    x_test = pd.DataFrame(
+        np.clip(scaler.transform(x_test_raw), 0.0, 1.0), columns=feature_names
+    )
+    y_train = y_train.reset_index(drop=True)
+    y_test = y_test.reset_index(drop=True)
+
+    x_train, y_train = balance_classes(
+        x_train,
+        y_train,
+        args.min_samples_per_class,
+        args.random_state,
+    )
+    y_train = pd.Series(y_train).reset_index(drop=True)
 
     args.processed_dir.mkdir(parents=True, exist_ok=True)
     train_frame = x_train.copy()
@@ -483,8 +590,9 @@ def main() -> int:
     train_frame.to_csv(train_path, index=False)
     test_frame.to_csv(test_path, index=False)
 
-    save_scaler(scaler, args.scaler_path, args.runtime_data_dir)
-    save_feature_contract(feature_names, args.feature_columns_path, args.runtime_data_dir)
+    runtime_data_dir = args.runtime_data_dir if args.write_runtime_copies else None
+    save_scaler(scaler, args.scaler_path, runtime_data_dir)
+    save_feature_contract(feature_names, args.feature_columns_path, runtime_data_dir)
 
     print_distribution("[INFO] Train split distribution:", y_train)
     print_distribution("[INFO] Test split distribution:", y_test)

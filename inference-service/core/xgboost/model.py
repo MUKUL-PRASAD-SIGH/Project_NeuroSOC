@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+import joblib
 import numpy as np
 from xgboost import XGBClassifier
 
@@ -38,7 +39,13 @@ def _load_default_feature_names() -> list[str]:
 
 
 class XGBoostClassifier:
-    """XGBoost wrapper for 80-feature normalized flow vectors."""
+    """XGBoost wrapper for normalized flow vectors.
+
+    A model trained on a subset of the live 80 features (for example the 76 that the CIC datasets
+    provide) ships its own column list in `<model>.meta.json` and its own MinMax scaler in
+    `<model>.scaler.pkl`. Such a model is fed the live *raw* vector through
+    `predict_proba_from_raw`, which picks its columns by name and scales them itself.
+    """
 
     CLASS_NAMES = CLASS_NAMES
 
@@ -46,6 +53,7 @@ class XGBoostClassifier:
         self.model_path = model_path
         self.feature_names = feature_names or _load_default_feature_names()
         self.model: XGBClassifier | None = None
+        self.scaler: Any | None = None
         if model_path and Path(model_path).exists():
             self.load(model_path)
 
@@ -62,6 +70,23 @@ class XGBoostClassifier:
             raise RuntimeError("XGBoost model is not loaded.")
         array = self._ensure_2d(features)
         return self.model.predict_proba(array)
+
+    def predict_proba_from_raw(self, raw_vector: np.ndarray, live_feature_names: list[str]) -> np.ndarray:
+        """Score a raw (unscaled) live feature vector whose columns are `live_feature_names`."""
+        if self.model is None:
+            raise RuntimeError("XGBoost model is not loaded.")
+        if self.scaler is None:
+            raise RuntimeError("This XGBoost model has no scaler; it cannot score raw features.")
+        raw = np.asarray(raw_vector, dtype=np.float64).reshape(-1)
+        if raw.shape[0] != len(live_feature_names):
+            raise RuntimeError(f"Expected {len(live_feature_names)} raw features, got {raw.shape[0]}.")
+        position = {name: index for index, name in enumerate(live_feature_names)}
+        missing = [name for name in self.feature_names if name not in position]
+        if missing:
+            raise RuntimeError(f"Live features are missing columns this model needs: {missing[:5]}")
+        selected = raw[[position[name] for name in self.feature_names]].reshape(1, -1)
+        scaled = np.clip(self.scaler.transform(selected), 0.0, 1.0).astype(np.float32)
+        return self.model.predict_proba(scaled)
 
     def get_top_class(self, features: np.ndarray) -> tuple[str, float]:
         probabilities = self.predict_proba(features)[0]
@@ -104,6 +129,13 @@ class XGBoostClassifier:
         if metadata_path.exists():
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
             self.feature_names = metadata.get("feature_names", self.feature_names)
+        scaler_path = target.with_suffix(target.suffix + ".scaler.pkl")
+        self.scaler = joblib.load(scaler_path) if scaler_path.exists() else None
+        if self.scaler is not None and self.scaler.n_features_in_ != len(self.feature_names):
+            raise ValueError(
+                f"{scaler_path.name} expects {self.scaler.n_features_in_} features but the model lists "
+                f"{len(self.feature_names)}."
+            )
         return self
 
 
