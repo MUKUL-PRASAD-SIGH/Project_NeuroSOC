@@ -14,7 +14,9 @@ SESSION="${SESSION:-neurosoc-train}"
 GPU="${GPU-T4}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d)"
-trap 'echo "[colab_train.sh] stopping session $SESSION"; colab stop -s "$SESSION" || true; rm -rf "$WORK"' EXIT
+KEEP_VM=0
+# Stop the VM on exit unless the results could not be downloaded (then they are still on it).
+trap 'if [ "$KEEP_VM" = 1 ]; then echo "[colab_train.sh] leaving session $SESSION running"; else echo "[colab_train.sh] stopping session $SESSION"; colab stop -s "$SESSION" || true; fi; rm -rf "$WORK"' EXIT
 
 case "$MODE" in
   smoke) DEFAULT_CONFIG='{"smoke": true}' ;;
@@ -53,10 +55,20 @@ if [ "$MODE" = full ]; then
   fi
 fi
 
-colab exec -s "$SESSION" --timeout "${EXEC_TIMEOUT:-21600}" -f "$REPO/scripts/colab_train.py"
+# A failed exec must not skip the download: colab_train.py archives after every model, so whatever
+# finished is still on the VM. Keep the exit status and report it at the end.
+EXEC_RC=0
+colab exec -s "$SESSION" --timeout "${EXEC_TIMEOUT:-21600}" -f "$REPO/scripts/colab_train.py" || EXEC_RC=$?
 
-colab download /content/neurosoc_results.tgz "$WORK/neurosoc_results.tgz" -s "$SESSION"
+# The download crossed a dropped connection once and the VM's results were lost, so retry.
+for attempt in 1 2 3 4 5 6; do
+  colab download /content/neurosoc_results.tgz "$WORK/neurosoc_results.tgz" -s "$SESSION" && break
+  if [ "$attempt" = 6 ]; then echo "[colab_train.sh] download failed after $attempt attempts; the VM is left running so you can retry: colab download /content/neurosoc_results.tgz <dest> -s $SESSION" >&2; KEEP_VM=1; exit 1; fi
+  echo "[colab_train.sh] download attempt $attempt failed; retrying in 20s" >&2
+  sleep 20
+done
 mkdir -p "$REPO/models/candidates" "$REPO/retraining-service/results"
 tar xzf "$WORK/neurosoc_results.tgz" -C "$REPO" --keep-old-files
 echo "[colab_train.sh] candidates now in $REPO/models/candidates:"
 ls "$REPO/models/candidates"
+exit "$EXEC_RC"

@@ -30,6 +30,8 @@ CONFIG = {
     "lnn_epochs": 30,
     "snn_max_rows": 60_000,
     "snn_epochs": 20,
+    "snn_lr": 3e-4,
+    "lnn_lr": 1e-3,
     "batch_size": 128,
 }
 
@@ -66,9 +68,22 @@ try:
 except ImportError:
     sys.exit("torch is not installed on this VM")
 
-# --no-deps keeps the VM's own torch build; the SNN falls back to a plain network if norse is missing.
-subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-deps", "norse"], check=False)
-subprocess.run([sys.executable, "-c", "import norse; print('[colab_train] norse', norse.__version__)"], check=False)
+# Norse needs nir, nirtorch and torchvision, so install it WITH its dependencies (torch is already
+# present and satisfies its torch>=2 requirement, so it is not reinstalled). Installing with --no-deps
+# made `from norse.torch import LIFRecurrentCell` fail silently and the SNN trained on a fallback
+# network whose hard threshold has no gradient.
+subprocess.run([sys.executable, "-m", "pip", "install", "-q", "norse"], check=False)
+check = subprocess.run(
+    [sys.executable, "-c", "from norse.torch import LIFRecurrentCell; import norse; print('norse', norse.__version__)"],
+    capture_output=True, text=True,
+)
+print("[colab_train]", check.stdout.strip() or check.stderr.strip()[-400:], flush=True)
+if check.returncode != 0 and "snn" in CONFIG["models"]:
+    print("[colab_train] Norse is unavailable; skipping the SNN instead of training the fallback network.", flush=True)
+    CONFIG["models"] = [name for name in CONFIG["models"] if name != "snn"]
+    failures_early = ["snn"]
+else:
+    failures_early = []
 
 flags = ["--smoke-test"] if CONFIG["smoke"] else []
 weight = ["--class-weight"] if CONFIG["class_weight"] else []
@@ -80,17 +95,29 @@ commands = {
     "lnn": [
         "train_lnn.py", *device, *weight, *batch,
         "--max-rows", str(CONFIG["lnn_max_rows"]), "--epochs", str(CONFIG["lnn_epochs"]),
+        "--lr", str(CONFIG["lnn_lr"]),
         *(["--sequence-dataset", str(SEQUENCES)] if SEQUENCES.exists() else []),
     ],
     "snn": [
         "train_snn.py", *device, *weight, *batch,
         "--max-rows", str(CONFIG["snn_max_rows"]), "--epochs", str(CONFIG["snn_epochs"]),
+        "--lr", str(CONFIG["snn_lr"]),
     ],
 }
 
+def write_results() -> None:
+    """(Re)write the archive the driver downloads. Called after every model, so a dropped connection
+    or a crash later in the run still leaves the finished models downloadable."""
+    with tarfile.open("/content/neurosoc_results.tgz", "w:gz") as archive:
+        for relative in ("models/candidates", "retraining-service/results"):
+            target = ROOT / relative
+            if target.exists():
+                archive.add(target, arcname=relative)
+
+
 LOG_DIR = ROOT / "retraining-service" / "results"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
-failures = []
+failures = list(failures_early)
 for name in CONFIG["models"]:
     cmd = [sys.executable, "-u", *commands[name], *flags]
     print(f"\n[colab_train] ===== {name}: {' '.join(cmd[2:])}", flush=True)
@@ -107,12 +134,9 @@ for name in CONFIG["models"]:
     if process.returncode != 0:
         failures.append(name)
         print(f"[colab_train] {name} FAILED (exit {process.returncode})", flush=True)
+    write_results()
 
-with tarfile.open("/content/neurosoc_results.tgz", "w:gz") as archive:
-    for relative in ("models/candidates", "retraining-service/results"):
-        target = ROOT / relative
-        if target.exists():
-            archive.add(target, arcname=relative)
+write_results()
 print("\n[colab_train] wrote /content/neurosoc_results.tgz")
 candidates = sorted((ROOT / "models" / "candidates").glob("*.manifest.json"))
 for manifest in candidates:

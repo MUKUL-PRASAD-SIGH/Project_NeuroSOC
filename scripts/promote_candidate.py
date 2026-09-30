@@ -25,6 +25,22 @@ sys.path.insert(0, str(ROOT / "inference-service"))
 from core.engine import DecisionEngine  # noqa: E402
 
 
+def next_version(proposed: str, current: str) -> str:
+    """Use the candidate's proposed version unless it is not newer than the active one.
+
+    Candidates trained from the same base both propose the same version (for example 1.0.3), so promoting
+    a second one would otherwise leave the version unchanged.
+    """
+    def parse(text: str) -> tuple[int, ...]:
+        return tuple(int(part) for part in text.split(".") if part.isdigit())
+
+    if parse(proposed) > parse(current):
+        return proposed
+    parts = list(parse(current)) or [0, 0, 0]
+    parts[-1] += 1
+    return ".".join(str(part) for part in parts)
+
+
 def atomic_write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
@@ -49,7 +65,7 @@ def main() -> int:
 
     current = json.loads(version_path.read_text(encoding="utf-8-sig")) if version_path.exists() else {}
     new_payload = dict(current)
-    new_payload["version"] = candidate["proposed_version"]
+    new_payload["version"] = next_version(candidate["proposed_version"], str(current.get("version", "0.0.0")))
     new_payload[candidate["model_key"]] = candidate["artifact_path"]
     validation_f1 = dict(new_payload.get("validation_f1") or {})
     validation_f1[candidate["model_key"]] = candidate["validation_f1"]
