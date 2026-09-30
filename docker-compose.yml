@@ -19,7 +19,6 @@ services:
   # ─────────────────────────────────────────
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
-    container_name: neuroshield-zookeeper
     networks: [neuroshield-net]
     ports:
       - "2181:2181"
@@ -30,7 +29,6 @@ services:
 
   kafka:
     image: confluentinc/cp-kafka:7.5.0
-    container_name: neuroshield-kafka
     networks:
       - neuroshield-net
       - sandbox-net
@@ -60,7 +58,6 @@ services:
 
   postgres:
     image: postgres:15-alpine
-    container_name: neuroshield-postgres
     networks:
       - neuroshield-net
       - sandbox-net
@@ -81,7 +78,6 @@ services:
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.0
-    container_name: neuroshield-keycloak
     profiles: ["local-identity"]
     command: start-dev --import-realm
     networks: [neuroshield-net]
@@ -96,7 +92,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: neuroshield-redis
     networks: [neuroshield-net]
     ports:
       - "6379:6379"
@@ -112,11 +107,10 @@ services:
   # ─────────────────────────────────────────
   ingestion:
     build: ./ingestion-service
-    container_name: neuroshield-ingestion
     networks: [neuroshield-net]
     ports:
-      - "8080:8080"
-      - "5140:5140/udp"
+      - "${INGESTION_HTTP_HOST_PORT:-8082}:8080"
+      - "${INGESTION_SYSLOG_HOST_PORT:-5141}:5140/udp"
     depends_on:
       kafka:
         condition: service_healthy
@@ -144,7 +138,6 @@ services:
 
   feature:
     build: ./feature-service
-    container_name: neuroshield-feature
     networks: [neuroshield-net]
     depends_on:
       kafka:
@@ -164,7 +157,8 @@ services:
 
   inference:
     build: ./inference-service
-    container_name: neuroshield-inference
+    # Import once before starting Uvicorn; the string target reimports main.py and duplicates metrics.
+    command: ["python", "-c", "import main, uvicorn; uvicorn.run(main.app, host=main.HOST, port=main.PORT)"]
     networks:
       neuroshield-net: {}
       sandbox-net: {}
@@ -205,6 +199,7 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       RATE_LIMIT_HASH_SECRET: ${RATE_LIMIT_HASH_SECRET:-}
       MODEL_PATH: /models
+      MODEL_VERSION_FILE: ${MODEL_VERSION_FILE:-/tmp/neurosoc-colab-model-placeholder.json}
       FEATURE_COLUMNS_PATH: /data/feature_columns.txt
       SANDBOX_CONFIDENCE_THRESHOLD: "0.50"
       SANDBOX_BASE_URL: http://sandbox:8001
@@ -229,7 +224,9 @@ services:
 
   sandbox:
     build: ./sandbox-service
-    container_name: neuroshield-sandbox
+    # Import the app once before handing it to Uvicorn. `python main.py` imports it again
+    # through the string target and duplicates Prometheus collectors in the default registry.
+    command: ["python", "-c", "import main, uvicorn; uvicorn.run(main.app, host=main.HOST, port=main.PORT)"]
     profiles: ["phase10plus"]
     networks:
       - sandbox-net
@@ -260,7 +257,6 @@ services:
 
   feedback:
     build: ./feedback-service
-    container_name: neuroshield-feedback
     profiles: ["phase8plus"]
     networks: [neuroshield-net]
     depends_on:
@@ -284,7 +280,6 @@ services:
     build:
       context: .
       dockerfile: retraining-service/Dockerfile
-    container_name: neuroshield-retraining
     profiles: ["phase8plus"]
     networks: [neuroshield-net]
     depends_on:
@@ -317,7 +312,6 @@ services:
         VITE_OIDC_REQUIRED: ${VITE_OIDC_REQUIRED:-false}
         # Shows the SDK Protection page; pair with ENABLE_UNIVERSAL_ENGINE=true on inference.
         VITE_UNIVERSAL_ENABLED: ${VITE_UNIVERSAL_ENABLED:-false}
-    container_name: neuroshield-dashboard
     profiles: ["phase11plus", "demo"]
     networks:
       neuroshield-net: {}
@@ -332,7 +326,6 @@ services:
       context: ./simulation_portal
       args:
         VITE_API_URL: http://localhost:8000
-    container_name: neuroshield-portal
     profiles: ["demo"]
     networks:
       neuroshield-net: {}
@@ -344,7 +337,6 @@ services:
 
   prometheus:
     image: prom/prometheus:latest
-    container_name: neuroshield-prometheus
     profiles: ["ops"]
     networks: [neuroshield-net]
     ports:
@@ -355,7 +347,6 @@ services:
 
   grafana:
     image: grafana/grafana:latest
-    container_name: neuroshield-grafana
     profiles: ["ops"]
     networks: [neuroshield-net]
     ports:
