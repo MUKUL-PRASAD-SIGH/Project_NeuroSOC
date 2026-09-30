@@ -519,12 +519,13 @@ Project_NeuroSOC/
 ## 🗺️ Roadmap
 
 - [x] SNN + LNN + XGBoost hybrid detection
-- [x] Kafka streaming pipeline with versioned event schemas and idempotency IDs
+- [x] Kafka streaming pipeline with versioned tenant events, idempotency IDs, fail-closed SASL/TLS client configuration, and infrastructure-managed shared topics
 - [x] Honeypot sandbox and feedback capture
 - [x] Analyst dashboard and NovaTrust bank simulation
 - [x] Keycloak OIDC, endpoint RBAC, admin-only model controls, audit log
 - [x] Analyst alert decisions, model candidate approval/promotion/rollback, and dashboard bearer-token wiring
 - [x] Per-alert feature explanations and Prometheus/Grafana overview
+- [x] Cross-replica API rate limits through Redis atomic counters; shared inference startup requires authenticated TLS Redis and fails closed on outage
 - [~] OIDC, event, alert, profile, and database query isolation carry tenant scope; production IdP validation, source provisioning, cross-tenant model-training policy, tamper-evident audit export, and retention policies remain
 - [ ] Approved production dataset, model drift/fairness/adversarial evaluation, and reproducible training
 - [ ] SIEM/EDR/ticketing connectors, incident runbooks, backup/restore drills, and load/security rehearsal
