@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from pathlib import Path
 
@@ -18,12 +19,16 @@ from common import (
     CLASS_NAMES,
     DATASET_TRAIN_PATH,
     MODEL_VERSION_PATH,
+    REPO_ROOT,
     RESULTS_DIR,
     add_inference_service_to_path,
+    apply_quantile_transform,
     balanced_class_weights,
     candidate_artifact_path,
+    fit_quantile_transform,
     generate_synthetic_dataset,
     load_tabular_dataset,
+    save_preprocessor,
     subsample_stratified,
     train_val_split,
     write_model_candidate,
@@ -32,7 +37,7 @@ from common import (
 add_inference_service_to_path()
 
 from core.snn.encoder import SpikeEncoder
-from core.snn.network import SNNAnomalyDetector
+from core.snn.network import LIFRecurrentCell, SNNAnomalyDetector
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,7 +57,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument("--timesteps", type=int, default=100)
+    parser.add_argument(
+        "--allow-fallback",
+        action="store_true",
+        help="Train even if Norse is missing. The fallback cell has a hard threshold with no gradient, so "
+        "only the readout learns; use it for smoke tests only.",
+    )
     parser.add_argument("--max-rows", type=int, default=0, help="Stratified row cap (0 = all).")
+    parser.add_argument(
+        "--no-quantile",
+        action="store_true",
+        help="Skip the quantile transform (it lifted macro-F1 from ~0.76 to ~0.95 in an ablation).",
+    )
+    parser.add_argument("--scaler-path", type=Path, default=REPO_ROOT / "datasets" / "scaler.pkl")
     parser.add_argument("--class-weight", action="store_true", help="Weight the loss by inverse class frequency.")
     return parser.parse_args()
 
@@ -68,13 +85,16 @@ def evaluate(
     encoder: SpikeEncoder,
     loader: DataLoader,
     device: torch.device,
+    deterministic: bool = True,
 ) -> tuple[float, float, np.ndarray, np.ndarray]:
+    # Inference encodes deterministically; the sampled variant matches how training encodes.
     model.eval()
+    encode = encoder.encode_deterministic if deterministic else encoder.encode
     predictions: list[int] = []
     targets: list[int] = []
     with torch.no_grad():
         for features, labels in loader:
-            spike_train = encoder.encode_deterministic(features.numpy()).to(device)
+            spike_train = encode(features.numpy()).to(device)
             logits, _ = model(spike_train)
             predictions.extend(torch.argmax(logits, dim=1).cpu().tolist())
             targets.extend(labels.cpu().tolist())
@@ -105,10 +125,19 @@ def save_confusion_matrix(
 
 def main() -> int:
     args = parse_args()
+    if LIFRecurrentCell is None and not (args.smoke_test or args.allow_fallback):
+        print("[ERROR] Norse is not importable (needs norse, nir, nirtorch, torchvision). Refusing to train the "
+              "fallback network, whose spiking layers receive no gradient. Pass --allow-fallback to override.")
+        return 2
     device = torch.device(args.device)
     features, labels, feature_names = prepare_dataset(args)
     features, labels = subsample_stratified(features, labels, args.max_rows)
     x_train, x_val, y_train, y_val = train_val_split(features, labels)
+    quantile = None
+    if not args.no_quantile:
+        quantile = fit_quantile_transform(x_train)
+        x_train = apply_quantile_transform(quantile, x_train)
+        x_val = apply_quantile_transform(quantile, x_val)
 
     label_encoder = ClassOrderEncoder()
     label_encoder.fit(CLASS_NAMES)
@@ -152,6 +181,7 @@ def main() -> int:
             running_loss += float(loss.item())
 
         accuracy, f1, y_true, y_pred = evaluate(model, encoder, val_loader, device)
+        _, f1_sampled, _, _ = evaluate(model, encoder, val_loader, device, deterministic=False)
         print(
             json.dumps(
                 {
@@ -159,6 +189,7 @@ def main() -> int:
                     "loss": round(running_loss / max(len(train_loader), 1), 4),
                     "val_accuracy": round(accuracy, 4),
                     "val_f1_macro": round(f1, 4),
+                    "val_f1_macro_sampled_spikes": round(f1_sampled, 4),
                 }
             )
         )
@@ -173,7 +204,7 @@ def main() -> int:
                     "n_features": x_train.shape[1],
                     "feature_names": feature_names,
                 },
-                "state_dict": model.state_dict(),
+                "state_dict": copy.deepcopy(model.state_dict()),
             }
             best_eval = (y_true, y_pred)
 
@@ -182,6 +213,8 @@ def main() -> int:
 
     candidate_path = candidate_artifact_path("snn", args.model_path, args.version_file)
     torch.save(best_state, candidate_path)
+    if not args.smoke_test:
+        save_preprocessor(candidate_path, feature_names, args.scaler_path, quantile)
     confusion_path = args.results_dir / "snn_confusion_matrix.png"
     save_confusion_matrix(best_eval[0], best_eval[1], confusion_path, label_encoder)
     candidate = write_model_candidate(
