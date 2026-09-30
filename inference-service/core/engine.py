@@ -24,7 +24,8 @@ from core.legacy_models import LegacyLSTMClassifier, LegacyMLPClassifier, Legacy
 from core.lnn.classifier import LNNClassifier
 from core.lnn.reservoir import LiquidReservoir
 from core.snn.encoder import SpikeEncoder
-from core.snn.network import CLASS_NAMES, SNNAnomalyDetector
+from core.preprocessing import FeaturePreprocessor
+from core.snn.network import CLASS_NAMES, LIFRecurrentCell, SNNAnomalyDetector
 from core.xgboost.model import XGBoostClassifier
 from core.xgboost.tree_logic import OverrideResult, TreeLogicOverride
 
@@ -200,6 +201,13 @@ class DecisionEngine:
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
         if isinstance(checkpoint, dict) and {"fc1.weight", "fc2.weight", "fc3.weight"}.issubset(checkpoint.keys()):
             return None, LegacyMLPClassifier.from_state_dict(checkpoint, checkpoint_path.parent, self.feature_names)
+        state_keys = checkpoint.get("state_dict", {}).keys() if isinstance(checkpoint, dict) else ()
+        if any(key.endswith("input_weights") for key in state_keys) and LIFRecurrentCell is None:
+            # Trained with Norse but Norse is not importable here; the fallback network has different
+            # weight names, so loading would raise and stop the whole service from starting.
+            log.error("SNN checkpoint %s needs Norse (norse, nir, nirtorch, torchvision), which is not installed; "
+                      "the SNN will run on the heuristic.", checkpoint_path)
+            return None, None
         config = checkpoint.get("config", {})
         input_size = int(config.get("input_size", 400))
         n_features = int(config.get("n_features", len(self.feature_names)))
@@ -216,6 +224,8 @@ class DecisionEngine:
         ).to(self.device)
         model.load_state_dict(checkpoint["state_dict"])
         model.eval()
+        # Travels with the model object so a hot-swap replaces both together.
+        model.preprocessor = FeaturePreprocessor.load_for(checkpoint_path)
         return encoder, model
 
     def _load_lnn_bundle(self, checkpoint_path: Path) -> tuple[LiquidReservoir | None, Any, int]:
@@ -224,8 +234,11 @@ class DecisionEngine:
             return None, LegacyLSTMClassifier.from_state_dict(checkpoint, checkpoint_path.parent, self.feature_names), 20
         reservoir_config = dict(checkpoint["reservoir_config"])
         classifier_config = dict(checkpoint["classifier_config"])
+        preprocessor = FeaturePreprocessor.load_for(checkpoint_path)
         feature_names = reservoir_config.get("feature_names")
-        if isinstance(feature_names, list) and feature_names:
+        # A model with its own preprocessor may use a column subset of the live contract; its names
+        # must not replace the engine's live feature names.
+        if preprocessor is None and isinstance(feature_names, list) and feature_names:
             self.feature_names = feature_names
         reservoir = LiquidReservoir(
             input_size=int(reservoir_config.get("input_size", len(self.feature_names))),
@@ -243,6 +256,7 @@ class DecisionEngine:
         ).to(self.device)
         classifier.load_state_dict(checkpoint["classifier_state"])
         classifier.eval()
+        classifier.preprocessor = preprocessor
         window_size = int(reservoir_config.get("window_size", 20))
         return reservoir, classifier, window_size
 
@@ -354,6 +368,18 @@ class DecisionEngine:
             score = self.snn_model.anomaly_score(model_input, apply_scaler=raw_feature_vector is not None)
             return float(np.asarray(score).reshape(-1)[0])
 
+        preprocessor = getattr(self.snn_model, "preprocessor", None)
+        if preprocessor is not None and self.snn_encoder is not None:
+            if raw_feature_vector is None:
+                # Nothing valid to feed a model that preprocesses raw features itself.
+                heuristic_probs = self._heuristic_class_probabilities(features_dict)
+                return float(1.0 - heuristic_probs[0])
+            model_input = preprocessor.transform(raw_feature_vector, self.feature_names)
+            spike_train = self.snn_encoder.encode_deterministic(model_input).to(self.device)
+            with torch.no_grad():
+                _, anomaly_score = self.snn_model(spike_train)
+            return float(anomaly_score.detach().cpu().numpy().reshape(-1)[0])
+
         if self.snn_model is not None and hasattr(self.snn_model, "anomaly_score"):
             score = self.snn_model.anomaly_score(feature_vector.reshape(1, -1))
             return float(np.asarray(score).reshape(-1)[0])
@@ -376,7 +402,14 @@ class DecisionEngine:
         features_dict: dict[str, Any],
     ) -> tuple[str, float]:
         if self.lnn_reservoir is not None and self.lnn_classifier is not None:
-            sequence = self._build_session_sequence(feature_vector, session_data)
+            preprocessor = getattr(self.lnn_classifier, "preprocessor", None)
+            if preprocessor is not None:
+                if raw_feature_vector is None:
+                    return self._label_and_threat_confidence(self._heuristic_class_probabilities(features_dict))
+                raw_sequence = self._build_session_sequence(raw_feature_vector, session_data, raw=True)
+                sequence = preprocessor.transform(raw_sequence, self.feature_names)
+            else:
+                sequence = self._build_session_sequence(feature_vector, session_data)
             tensor = torch.tensor(sequence, dtype=torch.float32, device=self.device).unsqueeze(1)
             with torch.no_grad():
                 states, _ = self.lnn_reservoir(tensor)
