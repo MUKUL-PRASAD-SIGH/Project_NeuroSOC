@@ -61,7 +61,14 @@ class UniversalEngine:
         return f"{tenant}:group:{entity_type}"
 
     # ── main entry point ────────────────────────────────────────────────────
-    def process(self, event: dict[str, Any], *, mode: str = "observe") -> dict[str, Any]:
+    def process(self, event: dict[str, Any], *, mode: str = "observe",
+                agent_policy: list[dict[str, Any]] | None = None, record: bool = True) -> dict[str, Any]:
+        """Score one normalized event.
+
+        ``agent_policy`` is the owning site's agent registry (None or empty = no policy checks).
+        ``record=False`` still teaches the baselines but leaves no trace on the dashboard feed, the session
+        stickiness or the sensitive-action window; the demo uses it to seed an agent's normal behavior.
+        """
         tenant = event["tenant_id"]
         entity = event["entity"]
         action = event["action"]
@@ -93,7 +100,9 @@ class UniversalEngine:
             cluster = (farm.cluster(self.kv, tenant, entity["id"], resource["id"])
                        if action in FARM_ACTIONS else {"size": 1, "members": [entity["id"]], "shared": {}})
 
-            agent_risk, agent_reasons = agent_guard.evaluate(event, feats, z)
+            sensitive_rate = self._sensitive_rate(tenant, event, agent_policy) if record else None
+            agent_risk, agent_reasons = agent_guard.evaluate(event, feats, z, policy=agent_policy,
+                                                             sensitive_rate=sensitive_rate)
 
             verdict, risk, detector_reasons = self._decide(
                 entity, action, human_score, human_reasons, cluster, agent_risk, agent_reasons, spike, drift)
@@ -131,6 +140,9 @@ class UniversalEngine:
                 "event_id": event["event_id"],
                 "entity": dict(entity),
                 "event_action": action,
+                "site_id": event.get("source_id"),
+                "agent_id": entity["id"] if entity["type"] == "agent" else None,
+                "tool": (event.get("agent") or {}).get("tool"),
                 "resource": dict(resource),
                 "value": event.get("value"),
                 "verdict": verdict,
@@ -163,13 +175,31 @@ class UniversalEngine:
             set_json(self.kv, entity_key + ":baseline", entity_baseline, ttl=ENTITY_TTL)
             set_json(self.kv, self._group_key(tenant, entity["type"]), group)
 
-            set_json(self.kv, session_key, {"verdict": verdict, "action": result["action"], "risk": result["risk"],
-                                            "reasons": result["reasons"], "verdict_id": result["verdict_id"],
-                                            "updated_at": time.time()}, ttl=SESSION_TTL)
             set_json(self.kv, f"{tenant}:verdict:{result['verdict_id']}", result, ttl=VERDICT_TTL)
-            self.kv.lpush_trim(f"{tenant}:verdicts", result["verdict_id"], RECENT_VERDICTS)
-            self._count_resource(tenant, resource["id"], action, verdict, event.get("value") or {})
+            if record:
+                set_json(self.kv, session_key, {"verdict": verdict, "action": result["action"], "risk": result["risk"],
+                                                "reasons": result["reasons"], "verdict_id": result["verdict_id"],
+                                                "updated_at": time.time()}, ttl=SESSION_TTL)
+                self.kv.lpush_trim(f"{tenant}:verdicts", result["verdict_id"], RECENT_VERDICTS)
+                self._count_resource(tenant, resource["id"], action, verdict, event.get("value") or {})
         return result
+
+    def _sensitive_rate(self, tenant: str, event: dict[str, Any], policy: list[dict[str, Any]] | None) -> int | None:
+        """Sensitive actions by this agent in the last minute, this one included (None when not applicable).
+
+        Counting attempts, not successes: a burst of blocked attempts is exactly what should keep tripping.
+        Called with the engine lock held.
+        """
+        if not policy or event["entity"]["type"] != "agent":
+            return None
+        spec = agent_guard.spec_for(policy, event["entity"]["id"])
+        if spec is None or not agent_guard.counts_as_sensitive(event, spec):
+            return None
+        key = f"{tenant}:agent:{event['entity']['id']}:sensitive"
+        now = float(event["timestamp"])
+        window = [t for t in (get_json(self.kv, key) or []) if now - t < agent_guard.SENSITIVE_WINDOW_SECONDS] + [now]
+        set_json(self.kv, key, window[-500:], ttl=2 * agent_guard.SENSITIVE_WINDOW_SECONDS)
+        return len(window)
 
     @staticmethod
     def _decide(entity: dict[str, str], action: str, human_score: float | None, human_reasons: list[str],
@@ -253,6 +283,7 @@ class UniversalEngine:
         entity = result["entity"]
         if decision == "restore":
             self.kv.delete(f"{tenant}:flag:{entity['type']}:{entity['id']}")
+            self.kv.delete(f"{tenant}:agent:{entity['id']}:sensitive")
             self.kv.delete(f"{tenant}:session:{result['session_id']}")
             self.kv.srem(f"{tenant}:res:{result['resource']['id']}:flagged", entity["id"])
         result["override"] = {"decision": decision, "actor": actor, "at": time.time()}
