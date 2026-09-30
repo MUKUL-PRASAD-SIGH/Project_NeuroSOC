@@ -77,7 +77,7 @@ def protected_client(monkeypatch):
     def fake_validate_access_token(token: str, _config: OIDCConfig) -> dict[str, object]:
         if token == "invalid":
             raise OIDCValidationError("Invalid OIDC access token")
-        return {"sub": "test-user", "username": f"{token}-user", "roles": [token]}
+        return {"sub": "test-user", "username": f"{token}-user", "tenant_id": "test-tenant", "roles": [token]}
 
     monkeypatch.setattr(inference_main, "validate_access_token", fake_validate_access_token)
     client = TestClient(inference_main.app)
@@ -86,12 +86,17 @@ def protected_client(monkeypatch):
 
 
 def test_list_candidates_returns_pending_candidate(protected_client, promotion_env):
-    response = protected_client.get("/api/v1/models/candidates", headers={"Authorization": "Bearer analyst"})
+    response = protected_client.get("/api/v1/models/candidates", headers={"Authorization": "Bearer platform-admin"})
     assert response.status_code == 200
     body = response.json()
     assert len(body) == 1
     assert body[0]["candidateId"] == "xgb_candidate_test"
     assert body[0]["status"] == "pending_approval"
+
+
+def test_tenant_admin_cannot_read_shared_model_candidates(protected_client, promotion_env):
+    response = protected_client.get("/api/v1/models/candidates", headers={"Authorization": "Bearer admin"})
+    assert response.status_code == 403
 
 
 def test_non_admin_cannot_promote(protected_client, promotion_env):
@@ -105,7 +110,7 @@ def test_non_admin_cannot_promote(protected_client, promotion_env):
 def test_promote_updates_manifest_and_activates_model(protected_client, promotion_env):
     response = protected_client.post(
         "/api/v1/models/candidates/xgb_candidate_test/promote",
-        headers={"Authorization": "Bearer admin"},
+        headers={"Authorization": "Bearer platform-admin"},
     )
 
     assert response.status_code == 200
@@ -125,7 +130,7 @@ def test_promote_updates_manifest_and_activates_model(protected_client, promotio
         (promotion_env["candidates_dir"] / "xgb_candidate_test.manifest.json").read_text(encoding="utf-8")
     )
     assert candidate_manifest["status"] == "promoted"
-    assert candidate_manifest["promoted_by"] == "admin-user"
+    assert candidate_manifest["promoted_by"] == "platform-admin-user"
 
     history_files = list(promotion_env["history_dir"].glob("*.json"))
     assert len(history_files) == 1
@@ -139,7 +144,7 @@ def test_promote_updates_manifest_and_activates_model(protected_client, promotio
 def test_promote_unknown_candidate_returns_404(protected_client, promotion_env):
     response = protected_client.post(
         "/api/v1/models/candidates/does-not-exist/promote",
-        headers={"Authorization": "Bearer admin"},
+        headers={"Authorization": "Bearer platform-admin"},
     )
     assert response.status_code == 404
 
@@ -147,13 +152,13 @@ def test_promote_unknown_candidate_returns_404(protected_client, promotion_env):
 def test_promote_already_decided_candidate_returns_409(protected_client, promotion_env):
     first = protected_client.post(
         "/api/v1/models/candidates/xgb_candidate_test/promote",
-        headers={"Authorization": "Bearer admin"},
+        headers={"Authorization": "Bearer platform-admin"},
     )
     assert first.status_code == 200
 
     second = protected_client.post(
         "/api/v1/models/candidates/xgb_candidate_test/promote",
-        headers={"Authorization": "Bearer admin"},
+        headers={"Authorization": "Bearer platform-admin"},
     )
     assert second.status_code == 409
 
@@ -163,7 +168,7 @@ def test_reject_marks_candidate_without_touching_active_manifest(protected_clien
 
     response = protected_client.post(
         "/api/v1/models/candidates/xgb_candidate_test/reject",
-        headers={"Authorization": "Bearer admin"},
+        headers={"Authorization": "Bearer platform-admin"},
     )
 
     assert response.status_code == 200
@@ -175,14 +180,14 @@ def test_reject_marks_candidate_without_touching_active_manifest(protected_clien
 def test_rollback_restores_previous_manifest(protected_client, promotion_env):
     promote_response = protected_client.post(
         "/api/v1/models/candidates/xgb_candidate_test/promote",
-        headers={"Authorization": "Bearer admin"},
+        headers={"Authorization": "Bearer platform-admin"},
     )
     assert promote_response.status_code == 200
     assert len(list(promotion_env["history_dir"].glob("*.json"))) == 1
 
     rollback_response = protected_client.post(
         "/api/v1/models/rollback",
-        headers={"Authorization": "Bearer admin"},
+        headers={"Authorization": "Bearer platform-admin"},
     )
 
     assert rollback_response.status_code == 200
@@ -199,5 +204,5 @@ def test_rollback_restores_previous_manifest(protected_client, promotion_env):
 
 
 def test_rollback_with_no_history_returns_404(protected_client, promotion_env):
-    response = protected_client.post("/api/v1/models/rollback", headers={"Authorization": "Bearer admin"})
+    response = protected_client.post("/api/v1/models/rollback", headers={"Authorization": "Bearer platform-admin"})
     assert response.status_code == 404

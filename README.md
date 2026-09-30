@@ -444,9 +444,14 @@ OIDC_REQUIRED=true
 ```
 
 - `APP_ENV=staging` or `APP_ENV=production` refuses to start unless OIDC and CORS use HTTPS, the simulation APIs are off, and a non-demo PostgreSQL URL is configured.
+- Shared environments also require `KAFKA_SECURITY_PROTOCOL=SASL_SSL`, a supported SCRAM mechanism, separate non-empty service principals/secrets (`INGESTION_KAFKA_*`, `FEATURE_KAFKA_*`, `INFERENCE_KAFKA_*`, etc.), and a readable trusted CA file at `KAFKA_SSL_CA_LOCATION`. Point `KAFKA_BOOTSTRAP` at the provisioned shared broker; the bundled Compose broker is local plaintext only. Provision topics and ACLs through infrastructure, then set `KAFKA_TOPICS_PREPROVISIONED=true`; runtime services do not receive cluster-wide topic creation rights. Limit each service principal to its required topics, and give each tenant source a separately controlled producer identity or equivalent broker-side isolation before trusting its tenant assignment.
 - When the sandbox service is configured, staging/production also require the same randomly generated `SANDBOX_SERVICE_TOKEN` (at least 32 characters) in inference and sandbox; local/test can leave it blank.
 - `CORS_ALLOWED_ORIGINS` accepts explicit HTTP(S) origins only. `TRUSTED_PROXY_IPS` accepts IPs or CIDRs only.
-- Model reload and promotion endpoints are **admin-only**.
+- Shared model reload and promotion endpoints require the separate **platform-admin** role. Tenant admins cannot change models used by every tenant.
+- In shared mode, every OIDC access token must carry a signed `tenant_id` claim. The local Keycloak realm export maps the administrator-managed `tenant_id` user attribute into the token; the API ignores caller-supplied tenant headers.
+- Set a unique `INGESTION_TENANT_ID` on each tenant-assigned sensor process in staging/production. Packet and flow messages use the required tenant-scoped v1.2 event schema. Unauthenticated bank-portal ingestion is local/test only.
+- PostgreSQL verdict, alert, decision, audit, training-label, and behavioral-profile storage is tenant-scoped with application filters and row-level security. Existing rows without verified ownership stay unassigned and are hidden from tenant queries.
+- Shared-mode tenant isolation still needs a production database migration/backup rehearsal, production IdP and claim-mapping verification, source-network isolation, and an explicit policy for cross-tenant model training. Do not treat local tests as a production certification.
 - With PostgreSQL configured, authentication, alert, response-action and model-change events are written to `security_audit_events`.
 - Change the example passwords in `identity/realm-export.json` before using a shared environment.
 
@@ -519,7 +524,7 @@ Project_NeuroSOC/
 - [x] Keycloak OIDC, endpoint RBAC, admin-only model controls, audit log
 - [x] Analyst alert decisions, model candidate approval/promotion/rollback, and dashboard bearer-token wiring
 - [x] Per-alert feature explanations and Prometheus/Grafana overview
-- [ ] Multi-tenant authorization, tamper-evident audit export, and retention policies
+- [~] OIDC, event, alert, profile, and database query isolation carry tenant scope; production IdP validation, source provisioning, cross-tenant model-training policy, tamper-evident audit export, and retention policies remain
 - [ ] Approved production dataset, model drift/fairness/adversarial evaluation, and reproducible training
 - [ ] SIEM/EDR/ticketing connectors, incident runbooks, backup/restore drills, and load/security rehearsal
 

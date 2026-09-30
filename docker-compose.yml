@@ -123,9 +123,17 @@ services:
     volumes:
       - ./data:/data
     environment:
-      KAFKA_BOOTSTRAP: kafka:9092
-      INGESTION_MODE: all
+      APP_ENV: ${APP_ENV:-local}
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP:-kafka:9092}
+      KAFKA_SECURITY_PROTOCOL: ${KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
+      KAFKA_SASL_MECHANISM: ${KAFKA_SASL_MECHANISM:-SCRAM-SHA-512}
+      KAFKA_SASL_USERNAME: ${INGESTION_KAFKA_SASL_USERNAME:-}
+      KAFKA_SASL_PASSWORD: ${INGESTION_KAFKA_SASL_PASSWORD:-}
+      KAFKA_TOPICS_PREPROVISIONED: ${KAFKA_TOPICS_PREPROVISIONED:-false}
+      KAFKA_SSL_CA_LOCATION: ${KAFKA_SSL_CA_LOCATION:-/etc/ssl/certs/ca-certificates.crt}
+      INGESTION_MODE: ${INGESTION_MODE:-all}
       INGESTION_SOURCE_ID: ${INGESTION_SOURCE_ID:-ingestion-service}
+      INGESTION_TENANT_ID: ${INGESTION_TENANT_ID:-local}
       DATA_DIR: /data/pcap
       SYSLOG_PORT: "5140"
       KAFKA_PRODUCER_RETRIES: "10"
@@ -144,7 +152,13 @@ services:
     volumes:
       - ./data:/data
     environment:
-      KAFKA_BOOTSTRAP: kafka:9092
+      APP_ENV: ${APP_ENV:-local}
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP:-kafka:9092}
+      KAFKA_SECURITY_PROTOCOL: ${KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
+      KAFKA_SASL_MECHANISM: ${KAFKA_SASL_MECHANISM:-SCRAM-SHA-512}
+      KAFKA_SASL_USERNAME: ${FEATURE_KAFKA_SASL_USERNAME:-}
+      KAFKA_SASL_PASSWORD: ${FEATURE_KAFKA_SASL_PASSWORD:-}
+      KAFKA_SSL_CA_LOCATION: ${KAFKA_SSL_CA_LOCATION:-/etc/ssl/certs/ca-certificates.crt}
       FLOW_TIMEOUT_SECONDS: "3"
     restart: unless-stopped
 
@@ -172,7 +186,12 @@ services:
       - ./data:/data
     environment:
       APP_ENV: ${APP_ENV:-local}
-      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP:-kafka:9092}
+      KAFKA_SECURITY_PROTOCOL: ${KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
+      KAFKA_SASL_MECHANISM: ${KAFKA_SASL_MECHANISM:-SCRAM-SHA-512}
+      KAFKA_SASL_USERNAME: ${INFERENCE_KAFKA_SASL_USERNAME:-}
+      KAFKA_SASL_PASSWORD: ${INFERENCE_KAFKA_SASL_PASSWORD:-}
+      KAFKA_SSL_CA_LOCATION: ${KAFKA_SSL_CA_LOCATION:-/etc/ssl/certs/ca-certificates.crt}
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in your .env file (see .env.example)}
       REDIS_URL: redis://redis:6379
       MODEL_PATH: /models
@@ -218,7 +237,12 @@ services:
     pids_limit: 128
     environment:
       APP_ENV: ${APP_ENV:-local}
-      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP:-kafka:9092}
+      KAFKA_SECURITY_PROTOCOL: ${KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
+      KAFKA_SASL_MECHANISM: ${KAFKA_SASL_MECHANISM:-SCRAM-SHA-512}
+      KAFKA_SASL_USERNAME: ${SANDBOX_KAFKA_SASL_USERNAME:-}
+      KAFKA_SASL_PASSWORD: ${SANDBOX_KAFKA_SASL_PASSWORD:-}
+      KAFKA_SSL_CA_LOCATION: ${KAFKA_SSL_CA_LOCATION:-/etc/ssl/certs/ca-certificates.crt}
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in your .env file (see .env.example)}
       SANDBOX_TIMEOUT_SEC: "300"
       SANDBOX_SERVICE_TOKEN: ${SANDBOX_SERVICE_TOKEN:-}
@@ -230,14 +254,18 @@ services:
     profiles: ["phase8plus"]
     networks: [neuroshield-net]
     depends_on:
-      kafka:
-        condition: service_healthy
       postgres:
         condition: service_healthy
     volumes:
       - ./data:/data
     environment:
-      KAFKA_BOOTSTRAP: kafka:9092
+      APP_ENV: ${APP_ENV:-local}
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP:-kafka:9092}
+      KAFKA_SECURITY_PROTOCOL: ${KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
+      KAFKA_SASL_MECHANISM: ${KAFKA_SASL_MECHANISM:-SCRAM-SHA-512}
+      KAFKA_SASL_USERNAME: ${FEEDBACK_KAFKA_SASL_USERNAME:-}
+      KAFKA_SASL_PASSWORD: ${FEEDBACK_KAFKA_SASL_PASSWORD:-}
+      KAFKA_SSL_CA_LOCATION: ${KAFKA_SSL_CA_LOCATION:-/etc/ssl/certs/ca-certificates.crt}
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in your .env file (see .env.example)}
       POLL_INTERVAL_SECONDS: "30"
     restart: unless-stopped
@@ -250,8 +278,6 @@ services:
     profiles: ["phase8plus"]
     networks: [neuroshield-net]
     depends_on:
-      kafka:
-        condition: service_healthy
       postgres:
         condition: service_healthy
     volumes:
@@ -259,7 +285,7 @@ services:
       - ./models:/models:ro
       - ./models/candidates:/models/candidates
     environment:
-      KAFKA_BOOTSTRAP: kafka:9092
+      APP_ENV: ${APP_ENV:-local}
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in your .env file (see .env.example)}
       RETRAIN_MIN_FEEDBACK_SAMPLES: "3"
       RETRAIN_INTERVAL_SECONDS: "30"

@@ -25,7 +25,9 @@ def _load_module(module_name: str, module_path: Path, extra_sys_path: Path | Non
     return module
 
 
-feedback_service = _load_module("neurosoc_feedback_main_for_tests", FEEDBACK_DIR / "main.py")
+feedback_service = _load_module(
+    "neurosoc_feedback_main_for_tests", FEEDBACK_DIR / "main.py", FEEDBACK_DIR
+)
 retraining_main = _load_module("neurosoc_retraining_main_for_tests", RETRAINING_DIR / "main.py", RETRAINING_DIR)
 
 

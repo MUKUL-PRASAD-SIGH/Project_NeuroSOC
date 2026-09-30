@@ -21,6 +21,7 @@ except ImportError:  # pragma: no cover - exercised in environments without the 
         return value
 
 from kafka import KafkaProducer
+from kafka_security import kafka_client_security_options
 
 
 logging.basicConfig(
@@ -31,6 +32,8 @@ log = logging.getLogger(__name__)
 
 
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
+APP_ENV = os.getenv("APP_ENV", "local").strip().lower()
+KAFKA_CLIENT_SECURITY_OPTIONS = kafka_client_security_options(APP_ENV)
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "30"))
 FEEDBACK_TOPIC = os.getenv("FEEDBACK_TOPIC", "feedback")
@@ -619,6 +622,7 @@ class FeedbackService:
         if self._producer is None:
             self._producer = KafkaProducer(
                 bootstrap_servers=self.kafka_bootstrap,
+                **KAFKA_CLIENT_SECURITY_OPTIONS,
                 value_serializer=lambda payload: json.dumps(payload).encode("utf-8"),
                 acks="all",
                 retries=3,
@@ -688,6 +692,8 @@ class FeedbackService:
 
 
 def main() -> None:
+    if os.getenv("APP_ENV", "local").strip().lower() in {"staging", "production"}:
+        raise RuntimeError("Sandbox feedback is disabled in shared deployments until tenant attribution is implemented.")
     service = FeedbackService()
     try:
         service.run_forever()

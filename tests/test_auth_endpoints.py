@@ -32,7 +32,14 @@ def protected_client(monkeypatch):
     def fake_validate_access_token(token: str, _config: OIDCConfig) -> dict[str, object]:
         if token == "invalid":
             raise OIDCValidationError("Invalid OIDC access token")
-        return {"sub": "test-user", "roles": [token]}
+        if token == "no-tenant":
+            return {"sub": "test-user", "roles": ["analyst"]}
+        role, separator, tenant_id = token.partition("@")
+        return {
+            "sub": "test-user",
+            "tenant_id": tenant_id if separator else "test-tenant",
+            "roles": [role],
+        }
 
     monkeypatch.setattr(inference_main, "validate_access_token", fake_validate_access_token)
     client = TestClient(inference_main.app)
@@ -45,6 +52,26 @@ def test_read_endpoint_allows_each_read_role(protected_client, role):
     response = protected_client.get("/api/stats", headers={"Authorization": f"Bearer {role}"})
 
     assert response.status_code == 200
+
+
+def test_oidc_requires_signed_tenant_claim_and_ignores_tenant_header(protected_client):
+    missing = protected_client.get("/api/v1/stats", headers={"Authorization": "Bearer no-tenant"})
+    assert missing.status_code == 401
+
+    with inference_main.runtime._lock:
+        inference_main.runtime._latest_alerts.extend(
+            [
+                {"tenant_id": "test-tenant", "session_id": "tenant-a-alert", "user_id": "alice", "source_ip": "192.0.2.1", "verdict": "HACKER", "confidence": 0.9},
+                {"tenant_id": "tenant-b", "session_id": "tenant-b-alert", "user_id": "bob", "source_ip": "192.0.2.2", "verdict": "HACKER", "confidence": 0.9},
+            ]
+        )
+
+    response = protected_client.get(
+        "/api/v1/alerts/latest",
+        headers={"Authorization": "Bearer analyst", "X-Tenant-ID": "tenant-b"},
+    )
+    assert response.status_code == 200
+    assert [item["session_id"] for item in response.json()["items"]] == ["tenant-a-alert"]
 
 
 def test_versioned_routes_are_canonical_and_legacy_api_prefix_still_works(protected_client):
@@ -390,7 +417,7 @@ def test_simulation_endpoints_are_hidden_by_default(protected_client, monkeypatc
     assert versioned_response.status_code == 404
 
 
-@pytest.mark.parametrize("role", ["analyst", "operator", "auditor"])
+@pytest.mark.parametrize("role", ["analyst", "operator", "admin", "auditor"])
 def test_model_reload_denies_non_admin_roles(protected_client, monkeypatch, role):
     monkeypatch.setattr(inference_main.runtime.engine, "check_model_version", lambda: False)
 
@@ -399,10 +426,10 @@ def test_model_reload_denies_non_admin_roles(protected_client, monkeypatch, role
     assert response.status_code == 403
 
 
-def test_model_reload_allows_admin(protected_client, monkeypatch):
+def test_model_reload_allows_platform_admin(protected_client, monkeypatch):
     monkeypatch.setattr(inference_main.runtime.engine, "check_model_version", lambda: False)
 
-    response = protected_client.post("/api/v1/models/reload", headers={"Authorization": "Bearer admin"})
+    response = protected_client.post("/api/v1/models/reload", headers={"Authorization": "Bearer platform-admin"})
 
     assert response.status_code == 200
     assert response.json()["reloaded"] is False
@@ -644,7 +671,7 @@ def test_audit_repository_uses_parameterized_database_insert(monkeypatch):
 
     connection = FakeConnection()
     repository = inference_main.VerdictRepository("postgresql://audit-test")
-    monkeypatch.setattr(repository, "_connect", lambda: connection)
+    monkeypatch.setattr(repository, "_connect", lambda *_args: connection)
     event = inference_main._new_security_audit_event(
         "security.authentication",
         "succeeded",
@@ -667,7 +694,14 @@ def test_audit_repository_uses_parameterized_database_insert(monkeypatch):
     assert connection.closed is True
 
 
-def configure_valid_production_environment(monkeypatch):
+def configure_valid_production_environment(monkeypatch, tmp_path):
+    kafka_ca = tmp_path / "trusted-kafka-ca.pem"
+    kafka_ca.write_text("test CA bundle", encoding="utf-8")
+    monkeypatch.setenv("KAFKA_SECURITY_PROTOCOL", "SASL_SSL")
+    monkeypatch.setenv("KAFKA_SASL_MECHANISM", "SCRAM-SHA-512")
+    monkeypatch.setenv("KAFKA_SASL_USERNAME", "inference-service")
+    monkeypatch.setenv("KAFKA_SASL_PASSWORD", "test-kafka-password")
+    monkeypatch.setenv("KAFKA_SSL_CA_LOCATION", str(kafka_ca))
     monkeypatch.setattr(inference_main, "APP_ENV", "production")
     monkeypatch.setattr(inference_main, "OIDC_REQUIRED", True)
     monkeypatch.setattr(inference_main, "OIDC_ISSUER", "https://identity.example.com/realms/neurosoc")
@@ -682,14 +716,14 @@ def configure_valid_production_environment(monkeypatch):
     monkeypatch.setattr(inference_main, "SANDBOX_SERVICE_TOKEN", "s" * 32)
 
 
-def test_production_startup_accepts_explicit_secure_configuration(monkeypatch):
-    configure_valid_production_environment(monkeypatch)
+def test_production_startup_accepts_explicit_secure_configuration(monkeypatch, tmp_path):
+    configure_valid_production_environment(monkeypatch, tmp_path)
 
     inference_main._validate_startup_configuration()
 
 
-def test_production_startup_rejects_simulation_api(monkeypatch):
-    configure_valid_production_environment(monkeypatch)
+def test_production_startup_rejects_simulation_api(monkeypatch, tmp_path):
+    configure_valid_production_environment(monkeypatch, tmp_path)
     monkeypatch.setattr(inference_main, "ENABLE_SIMULATION_API", True)
 
     with pytest.raises(RuntimeError, match="Simulation APIs"):
@@ -697,16 +731,16 @@ def test_production_startup_rejects_simulation_api(monkeypatch):
 
 
 @pytest.mark.parametrize("token", ["", "too-short"])
-def test_production_startup_rejects_missing_or_weak_sandbox_service_token(monkeypatch, token):
-    configure_valid_production_environment(monkeypatch)
+def test_production_startup_rejects_missing_or_weak_sandbox_service_token(monkeypatch, token, tmp_path):
+    configure_valid_production_environment(monkeypatch, tmp_path)
     monkeypatch.setattr(inference_main, "SANDBOX_SERVICE_TOKEN", token)
 
     with pytest.raises(RuntimeError, match="SANDBOX_SERVICE_TOKEN"):
         inference_main._validate_startup_configuration()
 
 
-def test_production_startup_rejects_wildcard_cors_and_demo_database(monkeypatch):
-    configure_valid_production_environment(monkeypatch)
+def test_production_startup_rejects_wildcard_cors_and_demo_database(monkeypatch, tmp_path):
+    configure_valid_production_environment(monkeypatch, tmp_path)
     monkeypatch.setattr(inference_main, "ALLOWED_ORIGINS", ["*"])
 
     with pytest.raises(RuntimeError, match="CORS_ALLOWED_ORIGINS"):
@@ -724,8 +758,8 @@ def test_production_startup_rejects_wildcard_cors_and_demo_database(monkeypatch)
         inference_main._validate_startup_configuration()
 
 
-def test_production_startup_rejects_change_me_database_credentials(monkeypatch):
-    configure_valid_production_environment(monkeypatch)
+def test_production_startup_rejects_change_me_database_credentials(monkeypatch, tmp_path):
+    configure_valid_production_environment(monkeypatch, tmp_path)
     monkeypatch.setattr(
         inference_main,
         "DATABASE_URL",

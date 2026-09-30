@@ -47,6 +47,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from kafka import KafkaProducer
 from kafka.errors import NoBrokersAvailable
 from pydantic import BaseModel, Field
+from kafka_security import kafka_client_security_options
 
 # ─── logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -60,6 +61,9 @@ KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
 INGESTION_MODE  = os.getenv("INGESTION_MODE", "all").lower()
 DATA_DIR        = os.getenv("DATA_DIR", "/data/pcap")
 INGESTION_SOURCE_ID = os.getenv("INGESTION_SOURCE_ID", "ingestion-service").strip()
+APP_ENV = os.getenv("APP_ENV", "local").strip().lower()
+INGESTION_TENANT_ID = os.getenv("INGESTION_TENANT_ID", "local").strip()
+KAFKA_CLIENT_SECURITY_OPTIONS = kafka_client_security_options(APP_ENV)
 TOPIC           = "raw-packets"
 LOG_EVERY       = 1000
 SYSLOG_PORT     = int(os.getenv("SYSLOG_PORT", "5140"))
@@ -74,6 +78,18 @@ SSH_AUTH_FAILURE_PATTERN = re.compile(
 
 if not INGESTION_SOURCE_ID or len(INGESTION_SOURCE_ID) > 116:
     raise ValueError("INGESTION_SOURCE_ID must contain 1 to 116 characters.")
+if APP_ENV not in {"local", "test", "staging", "production"}:
+    raise ValueError("APP_ENV must be local, test, staging, or production.")
+if INGESTION_MODE not in {"pcap", "netflow", "syslog", "bank_portal", "all"}:
+    raise ValueError("INGESTION_MODE must be pcap, netflow, syslog, bank_portal, or all.")
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", INGESTION_TENANT_ID):
+    raise ValueError("INGESTION_TENANT_ID must be a valid tenant identifier.")
+if APP_ENV in {"staging", "production"} and "INGESTION_TENANT_ID" not in os.environ:
+    raise RuntimeError("Staging and production require a trusted INGESTION_TENANT_ID per sensor instance.")
+if APP_ENV in {"staging", "production"} and INGESTION_TENANT_ID == "local":
+    raise RuntimeError("The local tenant cannot be used in staging or production.")
+if APP_ENV in {"staging", "production"} and INGESTION_MODE in {"bank_portal", "all"}:
+    raise RuntimeError("Unauthenticated bank-portal ingestion is local/test only; use tenant-assigned sensor ingress.")
 
 # Ensure DATA_DIR exists — FIX: path-not-found crash on first run
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -89,6 +105,7 @@ def build_producer() -> KafkaProducer:
         try:
             producer = KafkaProducer(
                 bootstrap_servers=KAFKA_BOOTSTRAP,
+                **KAFKA_CLIENT_SECURITY_OPTIONS,
                 value_serializer=lambda v: json.dumps(v).encode("utf-8"),
                 acks="all",
                 retries=5,
@@ -136,8 +153,9 @@ def _packet_identity(
 ) -> dict[str, Any]:
     """Attach stable source and retry identity metadata to one packet event."""
     return {
-        "schema_version": "1.1",
+        "schema_version": "1.2",
         "event_type": "network.packet",
+        "tenant_id": INGESTION_TENANT_ID,
         "source_id": f"{INGESTION_SOURCE_ID}:{source}",
         "correlation_id": correlation_id,
         "idempotency_key": idempotency_key or f"network.packet:{packet_id}",

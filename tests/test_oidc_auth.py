@@ -34,6 +34,7 @@ def make_token(private_key, *, issuer="http://localhost:8081/realms/neurosoc", a
         {
             "iss": issuer,
             "sub": "pilot-user",
+            "tenant_id": "acme-prod",
             "iat": now,
             "exp": expires or now + timedelta(minutes=5),
             "aud": audience,
@@ -58,6 +59,29 @@ def test_valid_token_returns_identity_and_roles(key_pair):
     assert claims["user_id"] == "pilot-user"
     assert claims["username"] == "pilot-analyst"
     assert claims["roles"] == ["analyst"]
+    assert claims["tenant_id"] == "acme-prod"
+
+
+@pytest.mark.parametrize("tenant_id", [None, "", "bad tenant", ["acme"], "x" * 129])
+def test_missing_or_malformed_tenant_claim_is_rejected(key_pair, tenant_id):
+    private_key, public_key = key_pair
+    now = datetime.now(timezone.utc)
+    claims = {
+        "iss": "http://localhost:8081/realms/neurosoc",
+        "sub": "pilot-user",
+        "iat": now,
+        "exp": now + timedelta(minutes=5),
+        "aud": "neurosoc-dashboard",
+        "tenant_id": tenant_id,
+    }
+    token = jwt.encode(claims, private_key, algorithm="RS256")
+
+    with pytest.raises(OIDCValidationError, match="tenant_id"):
+        validate_access_token(
+            token,
+            OIDCConfig("http://localhost:8081/realms/neurosoc", "neurosoc-dashboard"),
+            signing_key_loader=lambda _: public_key,
+        )
 
 
 def test_expired_token_is_rejected(key_pair):
@@ -120,12 +144,13 @@ def test_role_matrix_allows_auditor_read_but_not_response():
 
 
 def test_route_policy_covers_read_response_and_model_operations():
-    assert required_roles_for_route("/api/alerts", "GET") == {"analyst", "operator", "admin", "auditor"}
+    assert required_roles_for_route("/api/alerts", "GET") == {"analyst", "operator", "admin", "auditor", "platform-admin"}
     assert required_roles_for_route("/api/bank/transfer", "POST") == {"operator", "admin"}
     assert required_roles_for_route("/api/v1/bank/transfer", "POST") == {"operator", "admin"}
     assert required_roles_for_route("/api/v1/behavioral/vectorize", "POST") == {"operator", "admin"}
-    assert required_roles_for_route("/api/v1/models/reload", "POST") == {"admin"}
-    assert required_roles_for_route("/models/reload", "POST") == {"admin"}
+    assert required_roles_for_route("/api/v1/models/reload", "POST") == {"platform-admin"}
+    assert required_roles_for_route("/models/reload", "POST") == {"platform-admin"}
+    assert required_roles_for_route("/api/v1/models/candidates", "GET") == {"platform-admin"}
 
 
 @pytest.mark.parametrize(
@@ -139,7 +164,7 @@ def test_route_policy_covers_read_response_and_model_operations():
     ],
 )
 def test_model_control_and_admin_namespaces_are_admin_only(path, method):
-    assert required_roles_for_route(path, method) == {"admin"}
+    assert required_roles_for_route(path, method) == {"platform-admin"}
 
 
 @pytest.mark.parametrize(

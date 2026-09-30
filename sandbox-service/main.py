@@ -15,6 +15,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from kafka import KafkaProducer
+from kafka_security import kafka_client_security_options
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, generate_latest
 from pydantic import BaseModel, Field
 
@@ -43,6 +44,7 @@ HOST = os.getenv("SANDBOX_HOST", "0.0.0.0")
 PORT = int(os.getenv("SANDBOX_PORT", "8001"))
 FEEDBACK_TRIGGER_TOPIC = os.getenv("FEEDBACK_TRIGGER_TOPIC", "feedback-trigger")
 APP_ENV = os.getenv("APP_ENV", "local").strip().lower()
+KAFKA_CLIENT_SECURITY_OPTIONS = kafka_client_security_options(APP_ENV)
 
 EXEMPT_PATH_PREFIXES = ("/health", "/metrics")
 SANDBOX_SERVICE_TOKEN = os.getenv("SANDBOX_SERVICE_TOKEN", "").strip()
@@ -393,6 +395,7 @@ class SandboxManager:
         try:
             self._producer = KafkaProducer(
                 bootstrap_servers=KAFKA_BOOTSTRAP,
+                **KAFKA_CLIENT_SECURITY_OPTIONS,
                 value_serializer=lambda payload: json.dumps(payload).encode("utf-8"),
                 acks="all",
                 retries=3,

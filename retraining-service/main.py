@@ -564,6 +564,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    if os.getenv("APP_ENV", "local").strip().lower() in {"staging", "production"}:
+        raise RuntimeError("Automatic retraining is disabled in shared deployments until the tenant model-training policy is approved.")
     args = build_arg_parser().parse_args()
     service = RetrainingService(repository=PostgresFeedbackRepository(DATABASE_URL))
     if args.daemon:

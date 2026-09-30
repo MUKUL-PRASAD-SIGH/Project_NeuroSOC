@@ -56,10 +56,12 @@ from core.auth import (
     OIDCConfig,
     OIDCValidationError,
     canonical_route_path,
+    normalize_tenant_id,
     require_roles,
     required_roles_for_route,
     validate_access_token,
 )
+from core.kafka_security import kafka_client_security_options
 
 
 logging.basicConfig(
@@ -213,6 +215,7 @@ HOST = os.getenv("INFERENCE_HOST", "0.0.0.0")
 PORT = int(os.getenv("INFERENCE_PORT", "8000"))
 API_KEY = os.getenv("API_KEY", "")
 APP_ENV = os.getenv("APP_ENV", "local").strip().lower()
+KAFKA_CLIENT_SECURITY_OPTIONS = kafka_client_security_options(APP_ENV)
 OIDC_ISSUER = os.getenv("OIDC_ISSUER", "").rstrip("/")
 OIDC_AUDIENCE = os.getenv("OIDC_AUDIENCE", "neurosoc-dashboard")
 OIDC_REQUIRED = _read_bool_env("OIDC_REQUIRED", "false")
@@ -393,6 +396,7 @@ class RootResponse(StrictResponseModel):
 
 
 class ThreatVerdictResponse(StrictResponseModel):
+    tenant_id: StrictStr
     session_id: SessionIdentifier
     user_id: Identifier
     source_ip: SourceAddress
@@ -498,6 +502,7 @@ class AlertResponse(StrictResponseModel):
 
 
 class RawAlertResponse(StrictResponseModel):
+    tenant_id: StrictStr
     session_id: SessionIdentifier
     user_id: Identifier
     source_ip: SourceAddress
@@ -661,6 +666,7 @@ class ModelRollbackResponse(StrictResponseModel):
 
 
 class ProfileResponse(StrictResponseModel):
+    tenant_id: StrictStr
     user_id: Identifier
     profile_vector: list[FiniteFloat] = Field(min_length=20, max_length=20)
     profile_std: list[FiniteFloat] = Field(min_length=20, max_length=20)
@@ -1153,17 +1159,24 @@ class VerdictRepository:
     def __init__(self, database_url: str) -> None:
         self.database_url = database_url
 
-    def _connect(self):
+    def _connect(self, tenant_id: str | None = None):
         if not self.database_url:
             return None
         if psycopg2 is None or RealDictCursor is None:
             raise RuntimeError("psycopg2 is required to persist inference verdicts.")
-        return psycopg2.connect(
+        conn = psycopg2.connect(
             self.database_url,
             cursor_factory=RealDictCursor,
             connect_timeout=5,
             options="-c statement_timeout=10000 -c lock_timeout=3000",
         )
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT set_config('app.tenant_id', %s, false)", (tenant_id or "",))
+            return conn
+        except Exception:
+            conn.close()
+            raise
 
     def bootstrap(self) -> None:
         conn = self._connect()
@@ -1172,10 +1185,16 @@ class VerdictRepository:
             return
         with conn:
             with conn.cursor() as cur:
+                if APP_ENV in {"staging", "production"}:
+                    cur.execute("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user")
+                    role_flags = cur.fetchone() or {}
+                    if role_flags.get("rolsuper") or role_flags.get("rolbypassrls"):
+                        raise RuntimeError("Shared production DATABASE_URL must use a role without SUPERUSER or BYPASSRLS.")
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS verdicts (
                         id BIGSERIAL PRIMARY KEY,
+                        tenant_id TEXT,
                         session_id TEXT NOT NULL,
                         user_id TEXT NOT NULL,
                         source_ip TEXT NOT NULL,
@@ -1198,6 +1217,7 @@ class VerdictRepository:
                     """
                     CREATE TABLE IF NOT EXISTS alerts (
                         id BIGSERIAL PRIMARY KEY,
+                        tenant_id TEXT,
                         session_id TEXT NOT NULL,
                         user_id TEXT NOT NULL,
                         source_ip TEXT NOT NULL,
@@ -1211,6 +1231,7 @@ class VerdictRepository:
                     """
                     CREATE TABLE IF NOT EXISTS security_audit_events (
                         event_id TEXT PRIMARY KEY,
+                        tenant_id TEXT,
                         event_type TEXT NOT NULL,
                         outcome TEXT NOT NULL,
                         actor_id TEXT,
@@ -1228,6 +1249,7 @@ class VerdictRepository:
                     """
                     CREATE TABLE IF NOT EXISTS alert_decisions (
                         id BIGSERIAL PRIMARY KEY,
+                        tenant_id TEXT,
                         session_id TEXT NOT NULL,
                         decision TEXT NOT NULL,
                         status TEXT NOT NULL,
@@ -1238,19 +1260,14 @@ class VerdictRepository:
                     )
                     """
                 )
-                cur.execute(
-                    """
-                    CREATE INDEX IF NOT EXISTS idx_alert_decisions_session
-                    ON alert_decisions (session_id, decided_at DESC)
-                    """
-                )
                 # Same shape feedback-service writes to; an analyst decision is a human label
                 # that retraining should trust at least as much as the heuristic sandbox labels.
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS labeled_training_data (
                         id BIGSERIAL PRIMARY KEY,
-                        session_id TEXT UNIQUE NOT NULL,
+                        tenant_id TEXT,
+                        session_id TEXT NOT NULL,
                         features JSONB NOT NULL,
                         label TEXT NOT NULL,
                         confidence DOUBLE PRECISION NOT NULL,
@@ -1261,10 +1278,54 @@ class VerdictRepository:
                     )
                     """
                 )
+                # Existing pilot data has no trustworthy tenant attribution. Leave it
+                # unassigned so tenant-scoped queries cannot expose it to any customer.
+                for table_name in ("verdicts", "alerts", "security_audit_events", "alert_decisions", "labeled_training_data"):
+                    cur.execute(f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS tenant_id TEXT")
+                cur.execute("DROP INDEX IF EXISTS idx_alert_decisions_session")
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_verdicts_tenant_created ON verdicts (tenant_id, created_at DESC, id DESC)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_alerts_tenant_created ON alerts (tenant_id, created_at DESC, id DESC)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_alert_decisions_session ON alert_decisions (tenant_id, session_id, decided_at DESC)"
+                )
+                if APP_ENV in {"staging", "production"}:
+                    # Replace global session uniqueness with tenant-scoped identity.
+                    cur.execute("ALTER TABLE labeled_training_data DROP CONSTRAINT IF EXISTS labeled_training_data_session_id_key")
+                    cur.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS idx_training_tenant_session "
+                        "ON labeled_training_data (tenant_id, session_id) WHERE tenant_id IS NOT NULL"
+                    )
+                    tenant_tables = ("verdicts", "alerts", "security_audit_events", "alert_decisions", "labeled_training_data")
+                    for table_name in tenant_tables:
+                        cur.execute(f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY")
+                        cur.execute(f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY")
+                        if table_name == "security_audit_events":
+                            check_clause = "tenant_id IS NULL OR tenant_id = NULLIF(current_setting('app.tenant_id', true), '')"
+                        else:
+                            check_clause = "tenant_id = NULLIF(current_setting('app.tenant_id', true), '')"
+                        cur.execute(
+                            f"DO $neurosoc$ BEGIN IF NOT EXISTS ("
+                            f"SELECT 1 FROM pg_policies WHERE schemaname = current_schema() "
+                            f"AND tablename = '{table_name}' AND policyname = 'tenant_isolation'"
+                            f") THEN CREATE POLICY tenant_isolation ON {table_name} "
+                            f"USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')) "
+                            f"WITH CHECK ({check_clause}); END IF; END; $neurosoc$;"
+                        )
+                else:
+                    # Keep the local feedback/retraining profile working with its
+                    # single assigned tenant while shared-mode uniqueness is scoped.
+                    cur.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS idx_training_session_local "
+                        "ON labeled_training_data (session_id)"
+                    )
         conn.close()
 
     def record_audit_event(self, event: dict[str, Any]) -> None:
-        conn = self._connect()
+        conn = self._connect(event.get("tenant_id"))
         if conn is None:
             log.info("security_audit %s", json.dumps(event, sort_keys=True, separators=(",", ":")))
             return
@@ -1274,12 +1335,13 @@ class VerdictRepository:
                     cur.execute(
                         """
                         INSERT INTO security_audit_events (
-                            event_id, event_type, outcome, actor_id, actor_roles,
+                            event_id, tenant_id, event_type, outcome, actor_id, actor_roles,
                             http_method, route, source_ip, resource_id, details
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             event["event_id"],
+                            event.get("tenant_id"),
                             event["event_type"],
                             event["outcome"],
                             event.get("actor_id"),
@@ -1295,7 +1357,8 @@ class VerdictRepository:
             conn.close()
 
     def save_verdict(self, verdict: ThreatVerdict) -> None:
-        conn = self._connect()
+        tenant_id = getattr(verdict, "tenant_id", "local")
+        conn = self._connect(tenant_id)
         if conn is None:
             return
         with conn:
@@ -1304,6 +1367,7 @@ class VerdictRepository:
                 cur.execute(
                     """
                     INSERT INTO verdicts (
+                        tenant_id,
                         session_id,
                         user_id,
                         source_ip,
@@ -1319,9 +1383,10 @@ class VerdictRepository:
                         flow_features,
                         timestamp
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
+                        tenant_id,
                         verdict.session_id,
                         verdict.user_id,
                         verdict.source_ip,
@@ -1341,10 +1406,11 @@ class VerdictRepository:
                 if verdict.verdict == "HACKER":
                     cur.execute(
                         """
-                        INSERT INTO alerts (session_id, user_id, source_ip, verdict, confidence)
-                        VALUES (%s, %s, %s, %s, %s)
+                        INSERT INTO alerts (tenant_id, session_id, user_id, source_ip, verdict, confidence)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         """,
                         (
+                            tenant_id,
                             verdict.session_id,
                             verdict.user_id,
                             verdict.source_ip,
@@ -1368,8 +1434,8 @@ class VerdictRepository:
             vector.extend([0.0] * (80 - len(vector)))
         return vector[:80]
 
-    def latest_verdicts_for_user(self, user_id: str, limit: int = 10) -> list[dict[str, Any]]:
-        conn = self._connect()
+    def latest_verdicts_for_user(self, tenant_id: str, user_id: str, limit: int = 10) -> list[dict[str, Any]]:
+        conn = self._connect(tenant_id)
         if conn is None:
             return []
         try:
@@ -1381,19 +1447,19 @@ class VerdictRepository:
                                lnn_class, xgb_class, behavioral_delta, model_version, timestamp,
                                created_at
                         FROM verdicts
-                        WHERE user_id = %s
+                        WHERE tenant_id = %s AND user_id = %s
                         ORDER BY created_at DESC, id DESC
                         LIMIT %s
                         """,
-                        (user_id, limit),
+                        (tenant_id, user_id, limit),
                     )
                     rows = cur.fetchall() or []
             return [dict(row) for row in rows]
         finally:
             conn.close()
 
-    def latest_alert_rows(self, limit: int = 50) -> list[dict[str, Any]]:
-        conn = self._connect()
+    def latest_alert_rows(self, tenant_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        conn = self._connect(tenant_id)
         if conn is None:
             return []
         try:
@@ -1401,20 +1467,21 @@ class VerdictRepository:
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        SELECT session_id, user_id, source_ip, verdict, confidence, created_at
+                        SELECT tenant_id, session_id, user_id, source_ip, verdict, confidence, created_at
                         FROM alerts
+                        WHERE tenant_id = %s
                         ORDER BY created_at DESC, id DESC
                         LIMIT %s
                         """,
-                        (limit,),
+                        (tenant_id, limit),
                     )
                     rows = cur.fetchall() or []
             return [dict(row) for row in rows]
         finally:
             conn.close()
 
-    def get_verdict_by_session(self, session_id: str) -> dict[str, Any] | None:
-        conn = self._connect()
+    def get_verdict_by_session(self, tenant_id: str, session_id: str) -> dict[str, Any] | None:
+        conn = self._connect(tenant_id)
         if conn is None:
             return None
         try:
@@ -1425,11 +1492,11 @@ class VerdictRepository:
                         SELECT session_id, user_id, source_ip, verdict, confidence,
                                xgb_class, features, model_version, timestamp
                         FROM verdicts
-                        WHERE session_id = %s
+                        WHERE tenant_id = %s AND session_id = %s
                         ORDER BY created_at DESC, id DESC
                         LIMIT 1
                         """,
-                        (session_id,),
+                        (tenant_id, session_id),
                     )
                     row = cur.fetchone()
             return dict(row) if row else None
@@ -1438,6 +1505,7 @@ class VerdictRepository:
 
     def record_alert_decision(
         self,
+        tenant_id: str,
         session_id: str,
         decision: str,
         status: str,
@@ -1445,7 +1513,7 @@ class VerdictRepository:
         decided_by_roles: list[str],
         notes: str | None,
     ) -> dict[str, Any] | None:
-        conn = self._connect()
+        conn = self._connect(tenant_id)
         if conn is None:
             return None
         try:
@@ -1454,19 +1522,19 @@ class VerdictRepository:
                     cur.execute(
                         """
                         INSERT INTO alert_decisions (
-                            session_id, decision, status, decided_by, decided_by_roles, notes
-                        ) VALUES (%s, %s, %s, %s, %s, %s)
+                            tenant_id, session_id, decision, status, decided_by, decided_by_roles, notes
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                         RETURNING session_id, decision, status, decided_by, decided_at
                         """,
-                        (session_id, decision, status, decided_by, Json(decided_by_roles), notes),
+                        (tenant_id, session_id, decision, status, decided_by, Json(decided_by_roles), notes),
                     )
                     row = cur.fetchone()
             return dict(row) if row else None
         finally:
             conn.close()
 
-    def latest_decision_for_session(self, session_id: str) -> dict[str, Any] | None:
-        conn = self._connect()
+    def latest_decision_for_session(self, tenant_id: str, session_id: str) -> dict[str, Any] | None:
+        conn = self._connect(tenant_id)
         if conn is None:
             return None
         try:
@@ -1476,11 +1544,11 @@ class VerdictRepository:
                         """
                         SELECT session_id, decision, status, decided_by, decided_at
                         FROM alert_decisions
-                        WHERE session_id = %s
+                        WHERE tenant_id = %s AND session_id = %s
                         ORDER BY decided_at DESC, id DESC
                         LIMIT 1
                         """,
-                        (session_id,),
+                        (tenant_id, session_id),
                     )
                     row = cur.fetchone()
             return dict(row) if row else None
@@ -1489,6 +1557,7 @@ class VerdictRepository:
 
     def write_labeled_training_row(
         self,
+        tenant_id: str,
         session_id: str,
         features: list[float],
         label: str,
@@ -1497,7 +1566,7 @@ class VerdictRepository:
         trigger_reason: str,
         metadata: dict[str, Any],
     ) -> bool:
-        conn = self._connect()
+        conn = self._connect(tenant_id)
         if conn is None:
             return False
         try:
@@ -1506,10 +1575,10 @@ class VerdictRepository:
                     cur.execute(
                         """
                         INSERT INTO labeled_training_data (
-                            session_id, features, label, confidence, attack_type, trigger_reason, metadata, created_at
+                            tenant_id, session_id, features, label, confidence, attack_type, trigger_reason, metadata, created_at
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-                        ON CONFLICT (session_id) DO UPDATE
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                        ON CONFLICT (tenant_id, session_id) WHERE tenant_id IS NOT NULL DO UPDATE
                         SET features = EXCLUDED.features,
                             label = EXCLUDED.label,
                             confidence = EXCLUDED.confidence,
@@ -1518,7 +1587,7 @@ class VerdictRepository:
                             metadata = EXCLUDED.metadata,
                             created_at = NOW()
                         """,
-                        (session_id, Json(features), label, confidence, attack_type, trigger_reason, Json(metadata)),
+                        (tenant_id, session_id, Json(features), label, confidence, attack_type, trigger_reason, Json(metadata)),
                     )
             return True
         finally:
@@ -1533,6 +1602,7 @@ def _new_security_audit_event(
     http_method: str | None = None,
     actor_id: str | None = None,
     actor_roles: list[str] | None = None,
+    tenant_id: str | None = None,
     source_ip: str | None = None,
     resource_id: str | None = None,
     details: dict[str, Any] | None = None,
@@ -1544,6 +1614,7 @@ def _new_security_audit_event(
         "outcome": outcome,
         "actor_id": actor_value[:256] if actor_value else None,
         "actor_roles": sorted({str(role)[:64] for role in (actor_roles or [])}),
+        "tenant_id": tenant_id,
         "http_method": http_method,
         "route": route[:512],
         "source_ip": source_ip[:64] if source_ip else None,
@@ -1587,6 +1658,7 @@ def _request_audit_event(
         http_method=method,
         actor_id=identity.get("sub") or identity.get("user_id"),
         actor_roles=identity.get("roles", []),
+        tenant_id=identity.get("tenant_id"),
         source_ip=source_ip,
         resource_id=resource_id,
         details=details,
@@ -1605,8 +1677,12 @@ class ConnectionManager:
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
 
-    async def broadcast(self, message: dict):
+    async def broadcast(self, tenant_id: str, message: dict):
         for connection in self.active_connections:
+            identity = getattr(connection.state, "identity", None) or {}
+            connection_tenant_id = identity.get("tenant_id") or ("local" if APP_ENV in {"local", "test"} else None)
+            if connection_tenant_id != tenant_id:
+                continue
             try:
                 await connection.send_json(message)
             except Exception:
@@ -1891,8 +1967,8 @@ def _explanation_for_verdict(verdict: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _dimensions_from_profile(user_id: str) -> list[dict[str, Any]]:
-    profile = runtime.engine.behavioral_profiler.load_profile(user_id) if "runtime" in globals() else None
+def _dimensions_from_profile(user_id: str, tenant_id: str = "local") -> list[dict[str, Any]]:
+    profile = runtime.engine.behavioral_profiler.load_profile(user_id, tenant_id) if "runtime" in globals() else None
     vector = profile.profile_vector.astype(float).tolist() if profile is not None else [0.0] * len(BEHAVIOR_DIMENSIONS)
     return [
         {"subject": label, "value": round(float(vector[index]) * 100, 2)}
@@ -1916,7 +1992,7 @@ def _format_recent_verdicts(verdicts: list[dict[str, Any]]) -> list[dict[str, An
     ]
 
 
-def _recent_verdicts_by_user(user_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+def _recent_verdicts_by_user(user_ids: list[str], tenant_id: str) -> dict[str, list[dict[str, Any]]]:
     if "runtime" not in globals():
         return {}
     requested_ids = {user_id for user_id in user_ids if user_id}
@@ -1924,23 +2000,25 @@ def _recent_verdicts_by_user(user_ids: list[str]) -> dict[str, list[dict[str, An
     with runtime._lock:
         for verdict in runtime._latest_verdicts:
             user_id = str(verdict.get("user_id", "unknown-user"))
-            if user_id in requested_ids and len(grouped.setdefault(user_id, [])) < 10:
+            if verdict.get("tenant_id") == tenant_id and user_id in requested_ids and len(grouped.setdefault(user_id, [])) < 10:
                 grouped[user_id].append(verdict)
     return grouped
 
 
-def _recent_verdicts_for_user(user_id: str) -> list[dict[str, Any]]:
-    return _format_recent_verdicts(_recent_verdicts_by_user([user_id]).get(user_id, []))
+def _recent_verdicts_for_user(user_id: str, tenant_id: str) -> list[dict[str, Any]]:
+    return _format_recent_verdicts(_recent_verdicts_by_user([user_id], tenant_id).get(user_id, []))
 
 
 def _format_alert_payload(
     verdict: dict[str, Any],
     *,
     recent_verdicts: list[dict[str, Any]] | None = None,
+    tenant_id: str | None = None,
 ) -> dict[str, Any]:
     user_id = str(verdict.get("user_id", "unknown-user"))
     session_id = str(verdict.get("session_id", f"alert-{uuid.uuid4().hex[:8]}"))
-    decision_record = runtime.decision_for_session(session_id) if "runtime" in globals() else None
+    tenant_id = tenant_id or str(verdict.get("tenant_id") or "local")
+    decision_record = runtime.decision_for_session(tenant_id, session_id) if "runtime" in globals() else None
     return {
         "id": session_id,
         "severity": _severity_for_verdict(str(verdict.get("verdict", "")), float(verdict.get("confidence", 0.0))),
@@ -1952,9 +2030,9 @@ def _format_alert_payload(
         "userName": _display_name_for_user(user_id),
         "locationLabel": verdict.get("location_label") or _location_label_for_ip(verdict.get("source_ip")),
         "score": float(verdict.get("confidence", 0.0)),
-        "dimensions": _dimensions_from_profile(user_id),
+        "dimensions": _dimensions_from_profile(user_id, tenant_id),
         "recentVerdicts": (
-            _recent_verdicts_for_user(user_id)
+            _recent_verdicts_for_user(user_id, tenant_id)
             if recent_verdicts is None
             else _format_recent_verdicts(recent_verdicts)
         ),
@@ -1965,13 +2043,14 @@ def _format_alert_payload(
     }
 
 
-def _format_alert_payloads(verdicts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _format_alert_payloads(verdicts: list[dict[str, Any]], tenant_id: str) -> list[dict[str, Any]]:
     user_ids = [str(verdict.get("user_id", "unknown-user")) for verdict in verdicts]
-    recent_by_user = _recent_verdicts_by_user(user_ids)
+    recent_by_user = _recent_verdicts_by_user(user_ids, tenant_id)
     return [
         _format_alert_payload(
             verdict,
             recent_verdicts=recent_by_user.get(str(verdict.get("user_id", "unknown-user")), []),
+            tenant_id=tenant_id,
         )
         for verdict in verdicts
     ]
@@ -2089,9 +2168,10 @@ class InferenceRuntime:
         self._consumer_connected = False
         self._producer_connected = False
         self._processed_messages = 0
+        self._processed_by_tenant: dict[str, int] = {}
         self._latest_verdicts: deque[dict[str, Any]] = deque(maxlen=LATEST_VERDICTS_LIMIT)
         self._latest_alerts: deque[dict[str, Any]] = deque(maxlen=LATEST_VERDICTS_LIMIT)
-        self._alert_decisions: dict[str, dict[str, Any]] = {}
+        self._alert_decisions: dict[tuple[str, str], dict[str, Any]] = {}
         self.repository = VerdictRepository(DATABASE_URL)
         self._loop = asyncio.get_event_loop()
 
@@ -2128,15 +2208,19 @@ class InferenceRuntime:
                 log.warning("Digest scheduler iteration failed: %s", exc)
 
     def _maybe_send_daily_digest(self) -> None:
+        # Shared deployments need tenant-specific recipients and templates. Until
+        # those are configured, a global digest must not combine customer alerts.
+        if APP_ENV in {"staging", "production"}:
+            return
         now = datetime.now(timezone.utc)
         today = now.strftime("%Y-%m-%d")
         if self._last_digest_date == today:
             return
         if now.strftime("%H:%M") < REPORT_TIME:
             return
-        alert_rows = self.repository.latest_alert_rows(limit=200)
+        alert_rows = self.repository.latest_alert_rows("local", limit=200)
         if not alert_rows:
-            alert_rows = self.latest_alerts(200)
+            alert_rows = self.latest_alerts("local", 200)
         body = _build_digest_email_body(alert_rows)
         if _send_digest_email(body):
             self._last_digest_date = today
@@ -2162,6 +2246,7 @@ class InferenceRuntime:
         try:
             self._producer = KafkaProducer(
                 bootstrap_servers=KAFKA_BOOTSTRAP,
+                **KAFKA_CLIENT_SECURITY_OPTIONS,
                 value_serializer=lambda payload: json.dumps(payload).encode("utf-8"),
                 acks="all",
                 retries=3,
@@ -2198,6 +2283,7 @@ class InferenceRuntime:
                 consumer = KafkaConsumer(
                     INPUT_TOPIC,
                     bootstrap_servers=KAFKA_BOOTSTRAP,
+                    **KAFKA_CLIENT_SECURITY_OPTIONS,
                     group_id=GROUP_ID,
                     value_deserializer=lambda payload: json.loads(payload.decode("utf-8")),
                     auto_offset_reset="latest",
@@ -2209,7 +2295,10 @@ class InferenceRuntime:
 
                 while not self._stop_event.is_set():
                     for message in consumer:
-                        self._handle_feature_message(message.value)
+                        try:
+                            self._handle_feature_message(message.value)
+                        except (KeyError, TypeError, ValueError) as exc:
+                            log.error("Ignoring invalid or unscoped feature event (%s).", type(exc).__name__)
                         if self._stop_event.is_set():
                             break
             except NoBrokersAvailable:
@@ -2225,7 +2314,14 @@ class InferenceRuntime:
                     consumer.close()
 
     def _build_session_data(self, payload: dict[str, Any]) -> dict[str, Any]:
+        tenant_id = payload.get("tenant_id")
+        if tenant_id is None and APP_ENV in {"local", "test"}:
+            tenant_id = "local"
+        tenant_id = normalize_tenant_id(tenant_id)
+        if APP_ENV in {"staging", "production"} and tenant_id == "local":
+            raise ValueError("The local tenant cannot enter shared production inference.")
         return {
+            "tenant_id": tenant_id,
             "session_id": payload.get("flow_id", f"flow-{int(time.time() * 1000)}"),
             "user_id": payload.get("user_id") or payload.get("src_ip", "unknown-user"),
             "source_ip": payload.get("src_ip", "unknown"),
@@ -2255,15 +2351,20 @@ class InferenceRuntime:
     def _handle_verdict(self, verdict: ThreatVerdict) -> ThreatVerdict:
         VERDICTS_TOTAL.labels(verdict=verdict.verdict).inc()
         self._persist_verdict(verdict)
+        tenant_id = str(getattr(verdict, "tenant_id", "local"))
         canonical_verdict = verdict.to_dict()
         with self._lock:
-            prior_items = [item for item in self._latest_verdicts if item.get("session_id") != verdict.session_id]
+            prior_items = [
+                item for item in self._latest_verdicts
+                if (item.get("tenant_id", "local"), item.get("session_id")) != (tenant_id, verdict.session_id)
+            ]
             self._latest_verdicts.clear()
             self._latest_verdicts.appendleft(canonical_verdict)
             for item in prior_items:
                 self._latest_verdicts.append(item)
         if verdict.verdict == "HACKER":
             alert_payload = {
+                "tenant_id": tenant_id,
                 "session_id": verdict.session_id,
                 "user_id": verdict.user_id,
                 "source_ip": verdict.source_ip,
@@ -2280,6 +2381,7 @@ class InferenceRuntime:
                         "created",
                         route="/internal/detection",
                         http_method="MODEL",
+                        tenant_id=tenant_id,
                         source_ip=verdict.source_ip,
                         resource_id=verdict.session_id,
                         details={
@@ -2296,7 +2398,9 @@ class InferenceRuntime:
             try:
                 if self._loop and self._loop.is_running():
                     self._loop.call_soon_threadsafe(
-                        lambda: asyncio.create_task(manager.broadcast(_format_alert_payload(alert_payload)))
+                        lambda: asyncio.create_task(
+                            manager.broadcast(tenant_id, _format_alert_payload(alert_payload))
+                        )
                     )
             except Exception as e:
                 log.warning("WebSocket broadcast failed: %s", e)
@@ -2312,6 +2416,7 @@ class InferenceRuntime:
         self._handle_verdict(verdict)
         with self._lock:
             self._processed_messages += 1
+            self._processed_by_tenant[verdict.tenant_id] = self._processed_by_tenant.get(verdict.tenant_id, 0) + 1
         if self._processed_messages % 50 == 0:
             log.info(
                 "Processed %d extracted feature messages. Latest verdict=%s confidence=%.3f",
@@ -2338,57 +2443,61 @@ class InferenceRuntime:
             "database_enabled": bool(DATABASE_URL),
         }
 
-    def latest_verdicts(self, limit: int = 20) -> list[dict[str, Any]]:
+    def latest_verdicts(self, tenant_id: str, limit: int = 20) -> list[dict[str, Any]]:
         with self._lock:
-            return list(self._latest_verdicts)[:limit]
+            return [item for item in self._latest_verdicts if item.get("tenant_id") == tenant_id][:limit]
 
-    def latest_alerts(self, limit: int = 20) -> list[dict[str, Any]]:
+    def latest_alerts(self, tenant_id: str, limit: int = 20) -> list[dict[str, Any]]:
         with self._lock:
-            return list(self._latest_alerts)[:limit]
+            return [item for item in self._latest_alerts if item.get("tenant_id") == tenant_id][:limit]
 
-    def find_verdicts_for_user(self, user_id: str, limit: int = 10) -> list[dict[str, Any]]:
-        database_rows = self.repository.latest_verdicts_for_user(user_id, limit=limit)
+    def find_verdicts_for_user(self, tenant_id: str, user_id: str, limit: int = 10) -> list[dict[str, Any]]:
+        database_rows = self.repository.latest_verdicts_for_user(tenant_id, user_id, limit=limit)
         if database_rows:
             return database_rows
         with self._lock:
-            return [item for item in self._latest_verdicts if item.get("user_id") == user_id][:limit]
+            return [
+                item for item in self._latest_verdicts
+                if item.get("tenant_id") == tenant_id and item.get("user_id") == user_id
+            ][:limit]
 
-    def latest_verdict_for_user(self, user_id: str) -> dict[str, Any] | None:
-        verdicts = self.find_verdicts_for_user(user_id, limit=1)
+    def latest_verdict_for_user(self, tenant_id: str, user_id: str) -> dict[str, Any] | None:
+        verdicts = self.find_verdicts_for_user(tenant_id, user_id, limit=1)
         return verdicts[0] if verdicts else None
 
-    def list_alert_payloads(self, limit: int = 50) -> list[dict[str, Any]]:
-        database_rows = self.repository.latest_alert_rows(limit=limit)
+    def list_alert_payloads(self, tenant_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        database_rows = self.repository.latest_alert_rows(tenant_id, limit=limit)
         if database_rows:
             return database_rows
-        return self.latest_alerts(limit)
+        return self.latest_alerts(tenant_id, limit)
 
-    def find_verdict_by_session(self, session_id: str) -> dict[str, Any] | None:
+    def find_verdict_by_session(self, tenant_id: str, session_id: str) -> dict[str, Any] | None:
         with self._lock:
             for item in self._latest_verdicts:
-                if str(item.get("session_id")) == session_id:
+                if item.get("tenant_id") == tenant_id and str(item.get("session_id")) == session_id:
                     return dict(item)
             for item in self._latest_alerts:
-                if str(item.get("session_id")) == session_id:
+                if item.get("tenant_id") == tenant_id and str(item.get("session_id")) == session_id:
                     return dict(item)
-        return self.repository.get_verdict_by_session(session_id)
+        return self.repository.get_verdict_by_session(tenant_id, session_id)
 
-    def decision_for_session(self, session_id: str) -> dict[str, Any] | None:
+    def decision_for_session(self, tenant_id: str, session_id: str) -> dict[str, Any] | None:
         with self._lock:
-            cached = self._alert_decisions.get(session_id)
+            cached = self._alert_decisions.get((tenant_id, session_id))
         if cached is not None:
             return cached
-        return self.repository.latest_decision_for_session(session_id)
+        return self.repository.latest_decision_for_session(tenant_id, session_id)
 
     def record_decision(
         self,
+        tenant_id: str,
         session_id: str,
         decision: str,
         actor_id: str,
         actor_roles: list[str],
         notes: str | None,
     ) -> dict[str, Any] | None:
-        verdict = self.find_verdict_by_session(session_id)
+        verdict = self.find_verdict_by_session(tenant_id, session_id)
         if verdict is None:
             return None
 
@@ -2404,6 +2513,7 @@ class InferenceRuntime:
                 label = candidate_label if candidate_label in TRAINING_CLASS_NAMES else "OTHER"
             features = _coerce_verdict_features_for_training(verdict)
             written = self.repository.write_labeled_training_row(
+                tenant_id,
                 session_id,
                 features,
                 label,
@@ -2415,7 +2525,7 @@ class InferenceRuntime:
             if written:
                 training_label_written = label
 
-        self.repository.record_alert_decision(session_id, decision, status, actor_id, actor_roles, notes)
+        self.repository.record_alert_decision(tenant_id, session_id, decision, status, actor_id, actor_roles, notes)
         record = {
             "session_id": session_id,
             "decision": decision,
@@ -2425,7 +2535,7 @@ class InferenceRuntime:
             "training_label_written": training_label_written,
         }
         with self._lock:
-            self._alert_decisions[session_id] = record
+            self._alert_decisions[(tenant_id, session_id)] = record
         try:
             self.repository.record_audit_event(
                 _new_security_audit_event(
@@ -2435,6 +2545,7 @@ class InferenceRuntime:
                     http_method="POST",
                     actor_id=actor_id,
                     actor_roles=actor_roles,
+                    tenant_id=tenant_id,
                     resource_id=session_id,
                     details={
                         "decision": decision,
@@ -2598,6 +2709,7 @@ def _validate_startup_configuration() -> None:
     if _parse_cors_origins(",".join(ALLOWED_ORIGINS)) != ALLOWED_ORIGINS:
         raise RuntimeError("CORS_ALLOWED_ORIGINS must use canonical origin values.")
     _parse_trusted_proxy_ips(TRUSTED_PROXY_IPS)
+    kafka_client_security_options(APP_ENV)
 
     if APP_ENV not in {"staging", "production"}:
         return
@@ -3054,11 +3166,34 @@ def _authorize_bearer(authorization: str, oidc: OIDCConfig, path: str, method: s
     if scheme.lower() != "bearer" or not separator or not token:
         raise OIDCValidationError("Missing bearer token")
     claims = validate_access_token(token, oidc)
+    claims["tenant_id"] = normalize_tenant_id(claims.get("tenant_id"))
+    if APP_ENV in {"staging", "production"} and claims["tenant_id"] == "local":
+        raise OIDCValidationError("The local tenant cannot authenticate in a shared deployment")
     try:
         return require_roles(claims, set(required_roles_for_route(path, method)))
     except AuthorizationError as exc:
         exc.claims = claims
         raise
+
+
+def _request_tenant_id(request: Request) -> str:
+    identity = getattr(request.state, "identity", None) or {}
+    tenant_id = identity.get("tenant_id")
+    if isinstance(tenant_id, str):
+        return tenant_id
+    if APP_ENV in {"local", "test"}:
+        return "local"
+    raise HTTPException(status_code=401, detail="Tenant identity is required.")
+
+
+def _websocket_tenant_id(websocket: WebSocket) -> str:
+    identity = getattr(websocket.state, "identity", None) or {}
+    tenant_id = identity.get("tenant_id")
+    if isinstance(tenant_id, str):
+        return tenant_id
+    if APP_ENV in {"local", "test"}:
+        return "local"
+    raise RuntimeError("Tenant identity is required for alert streams.")
 
 
 async def _authorize_websocket(websocket: WebSocket) -> bool:
@@ -3152,7 +3287,10 @@ def root() -> dict[str, Any]:
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> dict[str, Any]:
-    return runtime.health()
+    health_payload = runtime.health()
+    if APP_ENV in {"staging", "production"}:
+        health_payload["latest_verdict"] = None
+    return health_payload
 
 
 @app.get("/metrics")
@@ -3162,29 +3300,37 @@ def metrics() -> Response:
 
 
 @app.get("/api/v1/verdicts/latest", response_model=LatestVerdictsResponse)
-def get_latest_verdicts(limit: int = Query(default=20, ge=1, le=LATEST_VERDICTS_LIMIT)) -> dict[str, Any]:
-    return {"count": min(limit, LATEST_VERDICTS_LIMIT), "items": runtime.latest_verdicts(limit)}
+def get_latest_verdicts(request: Request, limit: int = Query(default=20, ge=1, le=LATEST_VERDICTS_LIMIT)) -> dict[str, Any]:
+    tenant_id = _request_tenant_id(request)
+    items = runtime.latest_verdicts(tenant_id, limit)
+    return {"count": len(items), "items": items}
 
 
 @app.get("/api/v1/alerts/latest", response_model=LatestAlertsResponse)
-def get_latest_alerts(limit: int = Query(default=20, ge=1, le=LATEST_VERDICTS_LIMIT)) -> dict[str, Any]:
-    return {"count": min(limit, LATEST_VERDICTS_LIMIT), "items": runtime.latest_alerts(limit)}
+def get_latest_alerts(request: Request, limit: int = Query(default=20, ge=1, le=LATEST_VERDICTS_LIMIT)) -> dict[str, Any]:
+    tenant_id = _request_tenant_id(request)
+    items = runtime.latest_alerts(tenant_id, limit)
+    return {"count": len(items), "items": items}
 
 
 # --- Analyst API (Frontend Compatibility) ---
 
 @app.get("/api/v1/stats", response_model=StatsResponse)
-def get_api_stats() -> dict[str, Any]:
+def get_api_stats(request: Request) -> dict[str, Any]:
+    tenant_id = _request_tenant_id(request)
     with runtime._lock:
-        hacker_count = sum(1 for v in runtime._latest_verdicts if v.get("verdict") == "HACKER")
-        legit_count = sum(1 for v in runtime._latest_verdicts if v.get("verdict") == "LEGITIMATE")
-        avg_risk = sum(v.get("confidence", 0) for v in runtime._latest_verdicts) / max(len(runtime._latest_verdicts), 1)
+        verdicts = [v for v in runtime._latest_verdicts if v.get("tenant_id") == tenant_id]
+        alerts = [v for v in runtime._latest_alerts if v.get("tenant_id") == tenant_id]
+        hacker_count = sum(1 for v in verdicts if v.get("verdict") == "HACKER")
+        legit_count = sum(1 for v in verdicts if v.get("verdict") == "LEGITIMATE")
+        avg_risk = sum(v.get("confidence", 0) for v in verdicts) / max(len(verdicts), 1)
+        total_transactions = runtime._processed_by_tenant.get(tenant_id, 0)
 
     return {
-        "totalTransactions": runtime._processed_messages,
+        "totalTransactions": total_transactions,
         "hackerDetections": hacker_count,
         "avgRiskScore": round(avg_risk * 100, 2),
-        "liveAlerts": len(runtime._latest_alerts),
+        "liveAlerts": len(alerts),
         "legitimateCount": legit_count,
         "uptimeSeconds": int(time.time() - APP_STARTED_AT),
     }
@@ -3196,16 +3342,18 @@ def get_api_model_version() -> dict[str, Any]:
 
 
 @app.get("/api/v1/alerts", response_model=list[AlertResponse])
-def get_api_alerts() -> list[dict[str, Any]]:
-    return _format_alert_payloads(runtime.list_alert_payloads(50))
+def get_api_alerts(request: Request) -> list[dict[str, Any]]:
+    tenant_id = _request_tenant_id(request)
+    return _format_alert_payloads(runtime.list_alert_payloads(tenant_id, 50), tenant_id)
 
 
 @app.post("/api/v1/alerts/{session_id}/decision", response_model=AlertDecisionResponse)
 def submit_alert_decision(session_id: str, payload: AlertDecisionRequest, request: Request) -> dict[str, Any]:
     identity = getattr(request.state, "identity", None) or {}
+    tenant_id = _request_tenant_id(request)
     actor_id = str(identity.get("username") or identity.get("user_id") or "anonymous-analyst")
     actor_roles = list(identity.get("roles", []))
-    record = runtime.record_decision(session_id, payload.decision, actor_id, actor_roles, payload.notes)
+    record = runtime.record_decision(tenant_id, session_id, payload.decision, actor_id, actor_roles, payload.notes)
     if record is None:
         raise HTTPException(status_code=404, detail="Alert session not found.")
     return {
@@ -3223,10 +3371,11 @@ def submit_alert_decision(session_id: str, payload: AlertDecisionRequest, reques
 async def websocket_alerts(websocket: WebSocket):
     if not await _authorize_websocket(websocket):
         return
+    tenant_id = _websocket_tenant_id(websocket)
     await manager.connect(websocket)
     try:
         # Send current backlog first
-        backlog = _format_alert_payloads(runtime.list_alert_payloads(10))
+        backlog = _format_alert_payloads(runtime.list_alert_payloads(tenant_id, 10), tenant_id)
         if backlog:
             await websocket.send_json(backlog)
         
@@ -3241,8 +3390,10 @@ async def websocket_alerts(websocket: WebSocket):
 
 
 @app.post("/api/v1/analyze", response_model=ThreatVerdictResponse)
-def analyze(request: SessionAnalyzeRequest) -> dict[str, Any]:
-    verdict = runtime.analyze_manual(request.model_dump())
+def analyze(payload: SessionAnalyzeRequest, request: Request) -> dict[str, Any]:
+    session_data = payload.model_dump()
+    session_data["tenant_id"] = _request_tenant_id(request)
+    verdict = runtime.analyze_manual(session_data)
     return verdict.to_dict()
 
 
@@ -3265,10 +3416,10 @@ def behavioral_ingest(request: BehavioralIngestRequest) -> dict[str, Any]:
 
 @app.get("/api/v1/verdicts/current", response_model=VerdictSnapshotResponse)
 @app.get("/api/v1/verdicts/current-session", response_model=VerdictSnapshotResponse)
-def get_current_portal_verdict() -> dict[str, Any]:
+def get_current_portal_verdict(request: Request) -> dict[str, Any]:
     current = portal_state.current_verdict()
     if current is None:
-        latest = runtime.latest_verdicts(1)
+        latest = runtime.latest_verdicts(_request_tenant_id(request), 1)
         if not latest:
             return {
                 "sessionId": None,
@@ -3284,14 +3435,15 @@ def get_current_portal_verdict() -> dict[str, Any]:
 
 
 @app.get("/api/v1/verdicts/{user_id}", response_model=VerdictSnapshotResponse)
-def get_user_verdict(user_id: str) -> dict[str, Any]:
-    verdict = runtime.latest_verdict_for_user(user_id)
+def get_user_verdict(user_id: str, request: Request) -> dict[str, Any]:
+    tenant_id = _request_tenant_id(request)
+    verdict = runtime.latest_verdict_for_user(tenant_id, user_id)
     if verdict is None:
         raise HTTPException(status_code=404, detail="No verdicts found for user.")
-    recent = runtime.find_verdicts_for_user(user_id, limit=10)
+    recent = runtime.find_verdicts_for_user(tenant_id, user_id, limit=10)
     return {
         **_camelize_verdict(verdict),
-        "recentVerdicts": _recent_verdicts_for_user(user_id),
+        "recentVerdicts": _recent_verdicts_for_user(user_id, tenant_id),
         "history": [_camelize_verdict(item) for item in recent],
     }
 
@@ -3587,8 +3739,9 @@ def rollback_model(request: Request) -> dict[str, Any]:
 
 
 @app.get("/api/v1/profiles/{user_id}", response_model=ProfileResponse)
-def get_profile(user_id: str) -> dict[str, Any]:
-    profile = runtime.engine.behavioral_profiler.load_profile(user_id)
+def get_profile(user_id: str, request: Request) -> dict[str, Any]:
+    tenant_id = _request_tenant_id(request)
+    profile = runtime.engine.behavioral_profiler.load_profile(user_id, tenant_id)
     if profile is None:
         raise HTTPException(status_code=404, detail="Profile not found")
     return profile.to_payload()

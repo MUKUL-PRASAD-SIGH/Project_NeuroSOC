@@ -28,7 +28,13 @@ def protected_client(monkeypatch):
     def fake_validate_access_token(token: str, _config: OIDCConfig) -> dict[str, object]:
         if token == "invalid":
             raise OIDCValidationError("Invalid OIDC access token")
-        return {"sub": "test-user", "username": f"{token}-user", "roles": [token]}
+        role, separator, tenant_id = token.partition("@")
+        return {
+            "sub": "test-user",
+            "username": f"{role}-user",
+            "tenant_id": tenant_id if separator else "test-tenant",
+            "roles": [role],
+        }
 
     monkeypatch.setattr(inference_main, "validate_access_token", fake_validate_access_token)
     client = TestClient(inference_main.app)
@@ -61,9 +67,10 @@ def _isolate_runtime_state():
 def decision_capture(monkeypatch):
     calls = {"training_rows": [], "decisions": []}
 
-    def fake_write_labeled_training_row(session_id, features, label, confidence, attack_type, trigger_reason, metadata):
+    def fake_write_labeled_training_row(tenant_id, session_id, features, label, confidence, attack_type, trigger_reason, metadata):
         calls["training_rows"].append(
             {
+                "tenant_id": tenant_id,
                 "session_id": session_id,
                 "label": label,
                 "confidence": confidence,
@@ -73,9 +80,9 @@ def decision_capture(monkeypatch):
         )
         return True
 
-    def fake_record_alert_decision(session_id, decision, status, decided_by, decided_by_roles, notes):
+    def fake_record_alert_decision(tenant_id, session_id, decision, status, decided_by, decided_by_roles, notes):
         calls["decisions"].append(
-            {"session_id": session_id, "decision": decision, "status": status, "decided_by": decided_by}
+            {"tenant_id": tenant_id, "session_id": session_id, "decision": decision, "status": status, "decided_by": decided_by}
         )
         return None
 
@@ -84,11 +91,12 @@ def decision_capture(monkeypatch):
     return calls
 
 
-def _seed_verdict(session_id: str, xgb_class: str = "BRUTE_FORCE") -> None:
+def _seed_verdict(session_id: str, xgb_class: str = "BRUTE_FORCE", tenant_id: str = "test-tenant") -> None:
     with inference_main.runtime._lock:
         inference_main.runtime._latest_verdicts.appendleft(
             {
                 "session_id": session_id,
+                "tenant_id": tenant_id,
                 "user_id": "victim1",
                 "source_ip": "203.0.113.5",
                 "verdict": "HACKER",
@@ -119,6 +127,17 @@ def test_unknown_session_returns_404(protected_client, decision_capture):
         headers={"Authorization": "Bearer operator"},
     )
     assert response.status_code == 404
+
+
+def test_decision_cannot_target_another_tenants_alert(protected_client, decision_capture):
+    _seed_verdict("other-tenant-alert", tenant_id="tenant-b")
+    response = protected_client.post(
+        "/api/v1/alerts/other-tenant-alert/decision",
+        json={"decision": "confirm_threat"},
+        headers={"Authorization": "Bearer operator"},
+    )
+    assert response.status_code == 404
+    assert decision_capture["decisions"] == []
 
 
 def test_confirm_threat_writes_the_verdicts_own_class_as_the_training_label(protected_client, decision_capture):
@@ -182,6 +201,7 @@ def test_alert_list_reflects_the_recorded_decision_status(protected_client, deci
         inference_main.runtime._latest_alerts.appendleft(
             {
                 "session_id": "decision-list-test",
+                "tenant_id": "test-tenant",
                 "user_id": "victim1",
                 "source_ip": "203.0.113.5",
                 "confidence": 0.93,

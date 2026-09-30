@@ -25,7 +25,7 @@ def protected_client(monkeypatch):
     def fake_validate_access_token(token: str, _config: OIDCConfig) -> dict[str, object]:
         if token == "invalid":
             raise OIDCValidationError("Invalid OIDC access token")
-        return {"sub": "test-user", "roles": [token]}
+        return {"sub": "test-user", "tenant_id": "test-tenant", "roles": [token]}
 
     monkeypatch.setattr(inference_main, "validate_access_token", fake_validate_access_token)
     return TestClient(inference_main.app)
@@ -48,6 +48,7 @@ def _isolate_runtime_state():
 
 def _sample_verdict(**overrides):
     verdict = {
+        "tenant_id": "test-tenant",
         "session_id": "explain-test",
         "user_id": "victim1",
         "source_ip": "203.0.113.9",

@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { OIDC_REQUIRED } from "../lib/auth";
 import { useDashboardStore } from "../store/dashboardStore";
 
 const statusTone = {
@@ -15,13 +14,13 @@ export default function ModelCandidatesPanel() {
   const rejectCandidate = useDashboardStore((state) => state.rejectCandidate);
   const rollbackActiveModel = useDashboardStore((state) => state.rollbackActiveModel);
   const { roles } = useDashboardStore((state) => state.auth);
-  const canManageModels = !OIDC_REQUIRED || roles.includes("admin");
+  const canManageModels = roles.includes("platform-admin");
   const [busyId, setBusyId] = useState(null);
   const [actionError, setActionError] = useState(null);
 
   useEffect(() => {
-    fetchModelCandidates();
-  }, [fetchModelCandidates]);
+    if (canManageModels) fetchModelCandidates();
+  }, [canManageModels, fetchModelCandidates]);
 
   async function runAction(id, action) {
     setBusyId(id);
@@ -42,7 +41,7 @@ export default function ModelCandidatesPanel() {
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="soc-section-title">Model candidates</h2>
-          <p className="mt-0.5 text-xs text-soc-muted">Review a retrained candidate, promote it live, or roll back.</p>
+          <p className="mt-0.5 text-xs text-soc-muted">Review and change the model shared by all tenants.</p>
         </div>
         {canManageModels ? (
           <button

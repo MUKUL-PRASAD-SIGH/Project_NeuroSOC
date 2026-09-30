@@ -194,7 +194,7 @@ def test_maybe_send_daily_digest_only_sends_once_per_day_after_report_time(monke
     monkeypatch.setattr(inference_main, "SMTP_HOST", "smtp.example.com")
     monkeypatch.setattr(inference_main, "REPORT_EMAIL", "analyst@example.com")
     monkeypatch.setattr(inference_main, "REPORT_TIME", "00:00")
-    monkeypatch.setattr(inference_main.runtime.repository, "latest_alert_rows", lambda limit=200: [])
+    monkeypatch.setattr(inference_main.runtime.repository, "latest_alert_rows", lambda tenant_id, limit=200: [])
 
     sent = []
     monkeypatch.setattr(inference_main, "_send_digest_email", lambda body: sent.append(body) or True)

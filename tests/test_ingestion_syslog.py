@@ -13,7 +13,8 @@ from jsonschema import Draft202012Validator
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INGESTION_DIR = REPO_ROOT / "ingestion-service"
-SCHEMA_V1_1_PATH = REPO_ROOT / "schemas" / "security-event-v1.1.schema.json"
+sys.path.insert(0, str(INGESTION_DIR))
+SCHEMA_V1_1_PATH = REPO_ROOT / "schemas" / "security-event-v1.2.schema.json"
 
 
 def _load_ingestion_main():
@@ -114,7 +115,8 @@ def test_syslog_listener_publishes_a_v11_contract_event_for_a_real_udp_packet(mo
     assert record["protocol"] == "TCP"
     assert record["source"] == "syslog"
     assert record["user_id"] == "oracle"
-    assert record["schema_version"] == "1.1"
+    assert record["schema_version"] == "1.2"
+    assert record["tenant_id"] == "local"
     assert record["event_type"] == "network.packet"
     assert record["source_id"].endswith(":syslog")
     assert record["extra"]["login_attempts"] == 1
