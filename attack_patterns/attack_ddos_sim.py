@@ -1,9 +1,11 @@
+import os
 import requests
 import time
 import uuid
 import random
 
-TARGET = "http://localhost:8080/ingest"
+# Docker Compose publishes ingestion's HTTP port on INGESTION_HTTP_HOST_PORT (default 8082).
+TARGET = os.getenv("INGESTION_URL", f"http://localhost:{os.getenv('INGESTION_HTTP_HOST_PORT', '8082')}/ingest")
 
 def generate_packet():
     return {
