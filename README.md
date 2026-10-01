@@ -50,7 +50,7 @@
 
 📘 **Detailed design doc:** [Google Docs](https://docs.google.com/document/d/1GcDYW006dY0nc87Vipmqk0Oph9lL2IFMOXp71v2yV8w/edit?tab=t.jpmwkbfntfso)
 
-▶️ **Demo video:** _link coming soon_ <!-- DEMO_VIDEO_URL: replace "_link coming soon_" with [Watch the demo](URL) when the link is ready -->
+▶️ **Demo video:** [Watch the NeuroSOC demo on YouTube](https://youtu.be/eUf58W-rJoE)
 
 **At a glance**
 
@@ -617,7 +617,7 @@ Volumes 1 to 3 were revised to v1.2.0 to match the code; Volume 4 is new.
 | Detailed design document | [Google Docs](https://docs.google.com/document/d/1GcDYW006dY0nc87Vipmqk0Oph9lL2IFMOXp71v2yV8w/edit) |
 | ASYNC 2026 presentation | In the Drive folder above |
 | Research manuscript | *NeuroShield: A Neuromorphic Multi-Model Cybersecurity Platform...* (unpublished; available from the team) |
-| Demo video | _link coming soon_ <!-- DEMO_VIDEO_URL --> |
+| Demo video | [YouTube](https://youtu.be/eUf58W-rJoE) |
 | In this repository | [SDK guide](sdk/README.md) · [Python SDK](sdk/python/README.md) · [Browser SDK](sdk/js/README.md) · [Testing guide](TESTING.md) · [Demo test report](docs/DEMO_TEST_REPORT.md) · [Feature catalog](docs/FEATURES.md) · [Production plan](docs/PRODUCTION_PLAN.md) · [Personas & sandbox](docs/USER_PERSONAS_AND_SANDBOX.md) · [Action taxonomy](schemas/taxonomy.json) |
 
 ---

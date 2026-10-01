@@ -666,6 +666,7 @@ h2(doc, "13.3 Documentation")
 link_table(doc, H, [
     ("Detailed design document", "https://docs.google.com/document/d/1GcDYW006dY0nc87Vipmqk0Oph9lL2IFMOXp71v2yV8w/edit", "The original design document (Google Docs)."),
     ("Technical documentation archive", "https://drive.google.com/drive/folders/1kZnapQty0NLdxIYrU4Hc-vzrCqqcVp1g", "Google Drive folder: Volumes 1 to 3, the ASYNC 2026 presentation and, once uploaded, this volume."),
+    ("Demo video", "https://youtu.be/eUf58W-rJoE", "The NeuroSOC demo video (YouTube)."),
     ("Project README", "https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC/blob/main/README.md", "Overview, quick start and the NovaTrust demo walkthrough."),
     ("SDK README", "https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC/blob/main/sdk/README.md", "Both SDKs, keys, rules, privacy and releasing."),
     ("Python SDK README", "https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC/blob/main/sdk/python/README.md", "The text published on the PyPI project page."),
