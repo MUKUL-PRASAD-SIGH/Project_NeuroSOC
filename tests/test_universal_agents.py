@@ -257,3 +257,13 @@ def test_unreachable_neurosoc_still_fails_closed(stack):
     with pytest.raises(ActionBlocked) as blocked:
         tool(to="Alice", amount=1.0)
     assert blocked.value.verdict.verdict == "unavailable" and ran == []
+
+
+def test_publishable_key_config_accepts_same_origin_get_via_referer_but_not_a_stranger(stack):
+    """Browsers send no Origin header on a same-origin GET, so /sdk/config falls back to the Referer's origin."""
+    client, key = stack["client"], stack["protected"][0]["publishable_key"]
+    same_origin = client.get("/api/v1/sdk/config", params={"key": key}, headers={"Referer": f"{ORIGIN}/demo"})
+    assert same_origin.status_code == 200
+    assert client.get("/api/v1/sdk/config", params={"key": key}, headers={"Referer": "https://evil.example/x"}).status_code == 403
+    assert client.get("/api/v1/sdk/config", params={"key": key}).status_code == 403  # neither header: still refused
+    assert client.get("/api/v1/sdk/config", params={"key": key}, headers={"Origin": ORIGIN}).status_code == 200

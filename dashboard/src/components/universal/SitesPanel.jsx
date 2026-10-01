@@ -189,6 +189,17 @@ function KeysStep({ site, secret, form, confirmed, setConfirmed, showWarning, de
         {showWarning && !confirmed ? <p className="text-[11px] text-soc-red" role="alert">Confirm you copied the secret key first.</p> : null}
       </div>
 
+      {form.appType !== "web" ? (
+        <div className="soc-inset p-4" data-testid="install-command">
+          <p className="text-xs font-medium text-soc-text">Install the SDK <span className="font-normal text-soc-muted">· one command, no dependencies</span></p>
+          <div className="mt-2 flex items-center gap-3 rounded-lg border border-soc-border bg-black/30 px-3 py-2.5">
+            <span className="select-none text-soc-muted" aria-hidden="true">$</span>
+            <code className="flex-1 text-sm text-soc-text">pip install neurosoc</code>
+            <CopyButton value="pip install neurosoc" />
+          </div>
+        </div>
+      ) : null}
+
       <div>
         <div role="tablist" aria-label="Integration snippets" className="flex gap-2">
           {tabs.map((t) => (
@@ -196,7 +207,7 @@ function KeysStep({ site, secret, form, confirmed, setConfirmed, showWarning, de
           ))}
         </div>
         <div className="mt-3" role="tabpanel"><CodeBlock code={snippets[tab] || snippets[tabs[0].id]} label={`${tab} integration snippet`} /></div>
-        <p className="mt-2 text-[11px] text-soc-muted">Install the Python SDK with <code>pip install neurosoc</code>. The JavaScript SDK is not on npm yet: the script tag is served by this dashboard at <code>/neurosoc.min.js</code>.</p>
+        <p className="mt-2 text-[11px] text-soc-muted">The JavaScript SDK is not on npm yet: the script tag is served by this dashboard at <code>/neurosoc.min.js</code>.</p>
       </div>
 
       {demoAvailable && form.appType !== "web" ? (

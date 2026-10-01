@@ -26,6 +26,7 @@ export default defineConfig(({ command, mode }) => {
       proxy: {
         "/api": {
           target: apiTarget,
+          ws: true,   // the live verdict feed connects at /api/v1/universal/ws
           changeOrigin: true,
         },
         "/ws": {
