@@ -24,6 +24,7 @@ Analyst routes (Keycloak via the existing middleware, tenant from the token):
 from __future__ import annotations
 
 import logging
+from urllib.parse import urlsplit
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Literal
 
@@ -131,7 +132,13 @@ def build_router(engine: UniversalEngine, registry: SiteRegistry, hooks: Univers
         site = registry.by_publishable_key(key)
         if site is None:
             raise HTTPException(status_code=401, detail="Unknown NeuroSOC key.")
-        if not registry.origin_allowed(site, request.headers.get("origin")):
+        # Browsers omit Origin on same-origin GETs (the demo serves the page and the API from one host), so fall
+        # back to the Referer's origin. Both headers are only a browser-side control, not authentication.
+        origin = request.headers.get("origin")
+        if not origin:
+            referer = urlsplit(request.headers.get("referer") or "")
+            origin = f"{referer.scheme}://{referer.netloc}" if referer.scheme and referer.netloc else None
+        if not registry.origin_allowed(site, origin):
             raise HTTPException(status_code=403, detail="This origin is not registered for this key.")
         return site, "pk"
 
