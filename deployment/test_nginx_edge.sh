@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Tests deploy/nginx.deploy.conf against real containers (needs Docker; no images are built):
+# Tests deployment/nginx.deploy.conf against real containers (needs Docker; no images are built):
 #   * the demo, its APIs and /health are public; the analyst console and its API need the password
 #   * /ingest is closed
 #   * the visitor's address is taken from CF-Connecting-IP only when the request comes from the tunnel's address
 #   * the API proxy limit applies per visitor
 #
-#   deploy/test_nginx_edge.sh
+#   deployment/test_nginx_edge.sh
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -28,7 +28,7 @@ cleanup() {
 trap cleanup EXIT
 
 # The same file the deployment mounts, with the tunnel address moved into the test subnet.
-sed "s/172\.30\.0\.12/$TUNNEL_IP/" deploy/nginx.deploy.conf > "$WORK/default.conf"
+sed "s/172\.30\.0\.12/$TUNNEL_IP/" deployment/nginx.deploy.conf > "$WORK/default.conf"
 
 # A stub API: answers every request and reports the client address it was given in X-Forwarded-For.
 cat > "$WORK/api.conf" <<'EOF'

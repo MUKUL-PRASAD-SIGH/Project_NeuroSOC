@@ -42,7 +42,7 @@ The repository must contain the trained model files under `models/` (they are tr
 
 ### 2. Generate the secrets
 ```bash
-python3 deploy/preflight.py init --hostname demo.yourdomain.com
+python3 deployment/preflight.py init --hostname demo.yourdomain.com
 ```
 This writes `~/neurosoc-deploy/` (outside the repository, mode 600): `.env.deploy` with a random password or key for
 every setting below, `secrets/sites.json` with the demo application and **fresh keys**, and `secrets/htpasswd`. It prints the
@@ -60,8 +60,8 @@ You do not install `cloudflared` on the PC itself: it runs as a container in the
 
 ### 4. Check, then deploy
 ```bash
-python3 deploy/preflight.py check      # must end with "OK: ready to deploy."
-deploy/deploy.sh
+python3 deployment/preflight.py check      # must end with "OK: ready to deploy."
+deployment/deploy.sh
 ```
 The first build downloads and builds several large images (PyTorch among them), so it takes a while. `deploy.sh` waits for the
 services to become healthy, runs smoke tests (the demo is public and connected, the console and its API ask for a password),
@@ -87,7 +87,7 @@ and **rolls back to the previous images automatically** if anything fails.
 git tag v1.0.0 && git push origin v1.0.0
 ```
 The **Deploy** workflow validates the deployment files on GitHub's servers, then waits for your approval, then the runner
-on the PC runs `deploy/deploy.sh`. It refuses any commit that is not on `main`, and it never runs for pull requests.
+on the PC runs `deployment/deploy.sh`. It refuses any commit that is not on `main`, and it never runs for pull requests.
 
 > **Why those safeguards matter.** A self-hosted runner runs repository code on your PC, and membership of the `docker` group is
 > equivalent to root. Anyone who can get code onto `main` and tag it can run commands on the PC. Keep `main` protected (pull
@@ -97,14 +97,14 @@ on the PC runs `deploy/deploy.sh`. It refuses any commit that is not on `main`, 
 
 ```bash
 cd ~/neurosoc
-alias nsc='docker compose --env-file ~/neurosoc-deploy/.env.deploy -f docker-compose.yml -f deploy/docker-compose.deploy.yml'
+alias nsc='docker compose --env-file ~/neurosoc-deploy/.env.deploy -f docker-compose.yml -f deployment/docker-compose.deploy.yml'
 nsc ps                          # what is running and healthy
 nsc logs --tail=100 inference   # logs (each service keeps at most 3 x 10 MB)
 nsc restart inference           # restart one service
-deploy/backup.sh                # database backup to ~/neurosoc-deploy/backups (the last 14 are kept)
-deploy/test_nginx_edge.sh       # re-check the public/private rules against real containers
+deployment/backup.sh                # database backup to ~/neurosoc-deploy/backups (the last 14 are kept)
+deployment/test_nginx_edge.sh       # re-check the public/private rules against real containers
 ```
-- **Update by hand:** `git pull && deploy/deploy.sh`. **Roll back by hand:** `docker tag neurosoc/<service>:previous neurosoc/<service>:deploy`
+- **Update by hand:** `git pull && deployment/deploy.sh`. **Roll back by hand:** `docker tag neurosoc/<service>:previous neurosoc/<service>:deploy`
   for each of dashboard and inference, then `nsc up -d --no-build`.
 - **Back up** `~/neurosoc-deploy/` (it holds `.env.deploy` and `secrets/`) somewhere safe and encrypted.
 - **Change the analyst password:** `printf 'judge:%s\n' "$(openssl passwd -apr1)" > ~/neurosoc-deploy/secrets/htpasswd`
@@ -141,7 +141,7 @@ deploy/test_nginx_edge.sh       # re-check the public/private rules against real
 | Redis, Kafka, Postgres, the API, the sandbox | Only containers on the Docker networks | No host ports published (checked by `preflight.py check`) |
 
 Visitors' real addresses come from Cloudflare's `CF-Connecting-IP` header, trusted only from the tunnel container, so the
-rate limit and the bot-farm detector work per visitor and the header cannot be spoofed (tested by `deploy/test_nginx_edge.sh`).
+rate limit and the bot-farm detector work per visitor and the header cannot be spoofed (tested by `deployment/test_nginx_edge.sh`).
 
 **Known limits.** One shared analyst password rather than per-person accounts. Traffic between the tunnel container and nginx, and
 between services, is plain HTTP inside Docker. Redis and Kafka have no passwords because they are not reachable from outside.
@@ -164,7 +164,7 @@ deployment; the sample keys in `sdk/sites.local.json` are never loaded.
 ## What has and has not been verified
 
 Verified by automated tests and real runs on a development machine: the secret generation and every `check` rule
-(`tests/test_deploy_preflight.py`), the nginx rules against real containers (`deploy/test_nginx_edge.sh`: 15 checks,
+(`tests/test_deploy_preflight.py`), the nginx rules against real containers (`deployment/test_nginx_edge.sh`: 15 checks,
 including the spoofing case), that the rendered compose configuration publishes no ports, the seed file loading into the
 API, and that the whole test suite passes.
 

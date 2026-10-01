@@ -1,7 +1,7 @@
 name: Deploy
 
 # Validates the deployment files on every change to them, and deploys a release tag (v*) to the demo PC
-# through a self-hosted runner. See deploy/README.md for the one-time setup of the PC, the tunnel and the runner.
+# through a self-hosted runner. See deployment/README.md for the one-time setup of the PC, the tunnel and the runner.
 #
 # The deploy job runs only for a tag whose commit is on main, never for a pull request: a self-hosted runner
 # executes repository code on the PC, so it must never run code that has not been reviewed and merged.
@@ -10,7 +10,7 @@ on:
     tags: ["v*"]
   pull_request:
     paths:
-      - "deploy/**"
+      - "deployment/**"
       - "docker-compose.yml"
       - "dashboard/Dockerfile"
       - "dashboard/nginx.conf"
@@ -33,17 +33,17 @@ jobs:
 
       - name: Shell scripts parse
         run: |
-          for script in deploy/*.sh; do bash -n "$script"; done
+          for script in deployment/*.sh; do bash -n "$script"; done
 
       - name: Preflight generates and accepts a deployment
         run: |
-          python3 deploy/preflight.py --home "$RUNNER_TEMP/deploy-home" init \
+          python3 deployment/preflight.py --home "$RUNNER_TEMP/deploy-home" init \
             --hostname neurosoc-ci.dev \
             --tunnel-token "$(python3 -c "import base64,json;print(base64.b64encode(json.dumps({'a':'x','t':'y','s':'zzzzzzzz'}).encode()).decode())")"
-          python3 deploy/preflight.py --home "$RUNNER_TEMP/deploy-home" check --ci
+          python3 deployment/preflight.py --home "$RUNNER_TEMP/deploy-home" check --ci
 
       - name: nginx rules behave (public demo, private console, no IP spoofing)
-        run: deploy/test_nginx_edge.sh
+        run: deployment/test_nginx_edge.sh
 
       - name: The dashboard image builds for the public demo
         uses: docker/build-push-action@v6
@@ -80,4 +80,4 @@ jobs:
       - name: Deploy
         env:
           DEPLOY_HOME: ${{ vars.DEPLOY_HOME }}
-        run: deploy/deploy.sh
+        run: deployment/deploy.sh

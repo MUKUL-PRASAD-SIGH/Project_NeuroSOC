@@ -1,4 +1,4 @@
-"""deploy/preflight.py: what `init` writes, and that `check` catches the mistakes that would hurt a public deployment."""
+"""deployment/preflight.py: what `init` writes, and that `check` catches the mistakes that would hurt a public deployment."""
 from __future__ import annotations
 
 import base64
@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "deploy"))
+sys.path.insert(0, str(REPO / "deployment"))
 sys.path.insert(0, str(REPO / "inference-service"))
 sys.path.insert(0, str(REPO / "sdk" / "python"))
 
@@ -42,7 +42,7 @@ def edit_env(home: Path, **changes: str) -> None:
 
 
 def run_check(home: Path) -> tuple[int, str]:
-    result = subprocess.run([sys.executable, str(REPO / "deploy" / "preflight.py"), "--home", str(home), "check", "--ci"],
+    result = subprocess.run([sys.executable, str(REPO / "deployment" / "preflight.py"), "--home", str(home), "check", "--ci"],
                             capture_output=True, text=True)
     return result.returncode, result.stdout + result.stderr
 
@@ -172,7 +172,7 @@ def test_check_catches_a_seed_file_for_another_hostname(home):
 
 
 def test_nginx_config_keeps_the_analyst_console_private_and_the_demo_public():
-    text = (REPO / "deploy" / "nginx.deploy.conf").read_text()
+    text = (REPO / "deployment" / "nginx.deploy.conf").read_text()
     assert 'auth_basic "NeuroSOC analyst console";' in text and "auth_basic_user_file /etc/nginx/htpasswd;" in text
     for public in ("location = /demo", "location /api/v1/sdk/", "location /api/v1/demo/", "location = /health"):
         block = text[text.index(public):]
@@ -185,7 +185,7 @@ def test_nginx_config_keeps_the_analyst_console_private_and_the_demo_public():
 
 
 def test_compose_overlay_publishes_no_ports_and_uses_the_pinned_tunnel_image():
-    text = (REPO / "deploy" / "docker-compose.deploy.yml").read_text()
+    text = (REPO / "deployment" / "docker-compose.deploy.yml").read_text()
     assert re.search(r"cloudflare/cloudflared:\d{4}\.\d+\.\d+", text), "pin the tunnel image to a version"
     assert "ports: !reset []" in text and not re.search(r"^\s+ports:\s*\n\s+-", text, re.M)
     assert "ipv4_address: ${API_PROXY_CLOUDFLARED_IP:-172.30.0.12}" in text

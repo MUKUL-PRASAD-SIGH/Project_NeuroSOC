@@ -96,12 +96,12 @@ It needs no Docker, Kafka, Redis or database. Files in `tests/01_unit/`, `02_int
 
 ```bash
 pytest tests/test_deploy_preflight.py -q    # secret generation and every preflight check
-deploy/test_nginx_edge.sh                   # 15 checks of the nginx rules against real containers (needs Docker)
-python3 deploy/preflight.py check           # on the deployment machine, before every deploy
+deployment/test_nginx_edge.sh                   # 15 checks of the nginx rules against real containers (needs Docker)
+python3 deployment/preflight.py check           # on the deployment machine, before every deploy
 ```
 
 `test_nginx_edge.sh` starts two throw-away nginx containers on a private subnet and removes them afterwards; it can run next to a live stack.
-See [`deploy/README.md`](deploy/README.md).
+See [`deployment/README.md`](deployment/README.md).
 
 ## Troubleshooting
 - **Missing modules**: Make sure you activate your virtual environment and run `pip install -r requirements.txt`.

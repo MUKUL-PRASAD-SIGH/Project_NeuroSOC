@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Deploy or update the public demo on this machine. Run by the self-hosted GitHub runner on a release tag,
-# or by hand:   deploy/deploy.sh
+# or by hand:   deployment/deploy.sh
 #
 # Steps: preflight -> remember the running images -> build -> start -> wait for health -> smoke tests ->
 # roll back to the remembered images if anything fails. Needs the files created by
-# `python3 deploy/preflight.py init` (default location ~/neurosoc-deploy, or $DEPLOY_HOME).
+# `python3 deployment/preflight.py init` (default location ~/neurosoc-deploy, or $DEPLOY_HOME).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 DEPLOY_HOME="${DEPLOY_HOME:-$HOME/neurosoc-deploy}"
 ENV_FILE="$DEPLOY_HOME/.env.deploy"
-COMPOSE=(docker compose --env-file "$ENV_FILE" -f docker-compose.yml -f deploy/docker-compose.deploy.yml)
+COMPOSE=(docker compose --env-file "$ENV_FILE" -f docker-compose.yml -f deployment/docker-compose.deploy.yml)
 IMAGES=(dashboard inference ingestion feature sandbox feedback retraining simulation-portal)
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-480}"
 
@@ -22,7 +22,7 @@ exec 9>"$DEPLOY_HOME/.deploy.lock"
 flock -n 9 || { echo "another deployment is already running"; exit 1; }
 
 log "Preflight"
-python3 deploy/preflight.py --home "$DEPLOY_HOME" check
+python3 deployment/preflight.py --home "$DEPLOY_HOME" check
 
 log "Remembering the running images (for rollback)"
 for name in "${IMAGES[@]}"; do

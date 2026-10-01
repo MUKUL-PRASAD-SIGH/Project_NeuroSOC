@@ -789,17 +789,17 @@ para(doc, "The manuscript's statement that this is the first application of liqu
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 h1(doc, "15. Deployment of the Public Demo")
 para(doc, "The demo can be run on a spare PC and published through a Cloudflare Tunnel, so no router port is opened and the home IP address stays hidden. "
-          "The files are in the deploy/ folder and the step-by-step guide is deploy/README.md. This is a hardened public demo, not a production deployment: the NovaTrust "
+          "The files are in the deployment/ folder and the step-by-step guide is deployment/README.md. This is a hardened public demo, not a production deployment: the NovaTrust "
           "demo refuses to run with APP_ENV=production, so the stack runs in local mode and the analyst console is protected by a password at the edge instead of Keycloak.")
 h2(doc, "15.1 Components")
 caption(doc, "Table: Deployment Files")
 table(doc, ["File", "Purpose"], [
-    ["deploy/docker-compose.deploy.yml", "Overlay on docker-compose.yml: publishes no host port, builds the dashboard for the public demo, loads a generated seed file with fresh application keys, adds health checks, capped logs and the cloudflared tunnel container (pinned image)."],
-    ["deploy/nginx.deploy.conf", "The front door: restores the real visitor address from the tunnel, rate-limits the public APIs per visitor, keeps the analyst console behind basic auth, closes /ingest, adds security headers."],
-    ["deploy/preflight.py", "init creates the settings, secrets, seed file and analyst login outside the repository (mode 600); check validates files, values, host (Docker, RAM, disk) and the rendered compose configuration, including that no service publishes a port."],
-    ["deploy/deploy.sh", "Preflight, remember the running images, build, start, wait for health, smoke-test, and roll back to the remembered images if anything fails."],
-    ["deploy/backup.sh", "Compressed database backup, last 14 kept."],
-    ["deploy/test_nginx_edge.sh", "Tests the nginx rules against real containers on a private subnet."],
+    ["deployment/docker-compose.deploy.yml", "Overlay on docker-compose.yml: publishes no host port, builds the dashboard for the public demo, loads a generated seed file with fresh application keys, adds health checks, capped logs and the cloudflared tunnel container (pinned image)."],
+    ["deployment/nginx.deploy.conf", "The front door: restores the real visitor address from the tunnel, rate-limits the public APIs per visitor, keeps the analyst console behind basic auth, closes /ingest, adds security headers."],
+    ["deployment/preflight.py", "init creates the settings, secrets, seed file and analyst login outside the repository (mode 600); check validates files, values, host (Docker, RAM, disk) and the rendered compose configuration, including that no service publishes a port."],
+    ["deployment/deploy.sh", "Preflight, remember the running images, build, start, wait for health, smoke-test, and roll back to the remembered images if anything fails."],
+    ["deployment/backup.sh", "Compressed database backup, last 14 kept."],
+    ["deployment/test_nginx_edge.sh", "Tests the nginx rules against real containers on a private subnet."],
     [".github/workflows/deploy.yml", "Validates the deployment files on every change; deploys a v* tag through a self-hosted runner on the PC, only for commits on main, behind an approval environment."],
 ], [3100, 6260])
 h2(doc, "15.2 What Is Public and What Is Private")
