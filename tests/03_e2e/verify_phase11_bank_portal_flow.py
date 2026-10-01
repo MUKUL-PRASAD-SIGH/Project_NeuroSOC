@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import sys
 import tempfile
 from pathlib import Path
@@ -11,6 +12,10 @@ from fastapi.testclient import TestClient
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MODELS_DIR = REPO_ROOT / "models"
+
+# The demo account password comes from the environment (core/simulation_accounts.py); this run uses its own
+# random one unless the caller provides NOVATRUST_DEMO_PASSWORD_ALICE. It must be set before main is imported.
+ALICE_PASSWORD = os.environ.setdefault("NOVATRUST_DEMO_PASSWORD_ALICE", secrets.token_urlsafe(16))
 
 os.environ.setdefault("MODEL_PATH", str(MODELS_DIR))
 os.environ.setdefault("MODEL_VERSION_FILE", str(MODELS_DIR / "model_version.json"))
@@ -128,7 +133,7 @@ def main() -> int:
             "/api/bank/login",
             json={
                 "email": "normal1@novatrust.com",
-                "password": "password123",
+                "password": ALICE_PASSWORD,
                 "session_id": session_id,
                 "source_ip": "127.0.0.1",
             },
@@ -169,7 +174,7 @@ def main() -> int:
         session_id = "portal-forgetful-flow"
         post_behavioral(client, "normal1@novatrust.com", session_id, "/login")
 
-        for wrong_password in ("Password124", "password12"):
+        for wrong_password in (ALICE_PASSWORD + "x", ALICE_PASSWORD[:-1]):
             attempt = client.post(
                 "/api/bank/login",
                 json={
@@ -185,7 +190,7 @@ def main() -> int:
             "/api/bank/login",
             json={
                 "email": "normal1@novatrust.com",
-                "password": "password123",
+                "password": ALICE_PASSWORD,
                 "session_id": session_id,
                 "source_ip": "127.0.0.1",
             },
@@ -205,7 +210,7 @@ def main() -> int:
             "/api/bank/login",
             json={
                 "email": "normal1@novatrust.com",
-                "password": "password123",
+                "password": ALICE_PASSWORD,
                 "session_id": session_id,
                 "source_ip": "127.0.0.1",
             },

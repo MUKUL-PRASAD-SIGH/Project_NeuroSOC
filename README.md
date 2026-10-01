@@ -493,7 +493,7 @@ cp .env.example .env
 docker compose --profile phase8plus --profile phase10plus --profile phase11plus --profile demo up -d --build
 ```
 
-The bank simulation APIs are off by default. Set `ENABLE_SIMULATION_API=true` in `.env` **only for local demos**.
+The bank simulation APIs are off by default. Set `ENABLE_SIMULATION_API=true` in `.env` **only for local demos**. The fictional demo accounts' passwords are read from `NOVATRUST_DEMO_PASSWORD_ALICE`, `_BOB` and `_CAROL` in `.env` (see `.env.example`); an unset one gets a random password, so that account cannot be logged into.
 
 </details>
 
