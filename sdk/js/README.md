@@ -1,5 +1,7 @@
 # @neurosoc/sdk
 
+> **Status:** the npm package `@neurosoc/sdk` is not published yet, so the CDN and `npm i` instructions below work only after its first release (see [Releasing](../README.md#releasing)). Until then, use the bundle your NeuroSOC dashboard serves at `/neurosoc.min.js`, or build it here with `npm run build`.
+
 Browser SDK for [NeuroSOC](https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC): tells people from bots and bot farms on any website and reports to your NeuroSOC engine. It measures typing and mouse timing, never content. Under 5 KB gzipped, no dependencies.
 
 ## Script tag
