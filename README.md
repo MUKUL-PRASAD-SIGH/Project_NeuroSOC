@@ -27,6 +27,7 @@
 **[SDK & Demo](#-novatrust-demo-the-whole-sdk-pipeline-in-one-sandbox)** ·
 **[Models & Accuracy](#-models-and-measured-accuracy)** ·
 **[Quick Start](#-quick-start)** ·
+**[Deployment](#-deployment)** ·
 **[Roadmap](#roadmap)** ·
 **[Documentation](#-documentation)** ·
 **[References](#-references)**
@@ -576,6 +577,20 @@ The CI workflow in [`.github/workflows/product-safety.yml`](.github/workflows/pr
 </details>
 
 <p align="right"><a href="#top">⬆ back to top</a></p>
+
+---
+
+## 🚀 Deployment
+
+The demo can run on a spare PC and be published through a **Cloudflare Tunnel**: no router ports are opened, nothing is published on the PC's network, the analyst console is behind a password, and a self-hosted GitHub runner redeploys a release tag after you approve it.
+
+```bash
+python3 deployment/preflight.py init --hostname demo.yourdomain.com   # generates every secret, outside the repository
+python3 deployment/preflight.py check                                  # verifies settings, host and configuration
+deployment/deploy.sh                                                   # builds, starts, smoke-tests, rolls back on failure
+```
+
+The full guide, with the Cloudflare and runner setup, the settings checklist, the security model and troubleshooting, is in **[`deployment/README.md`](deployment/README.md)**. This is a hardened public demo, not a production deployment: the demo refuses to run with `APP_ENV=production`.
 
 ---
 

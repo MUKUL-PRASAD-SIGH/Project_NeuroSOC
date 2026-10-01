@@ -8,7 +8,7 @@ import pytest
 import torch
 from sklearn.preprocessing import MinMaxScaler, QuantileTransformer
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "inference-service"))
 
 from core.behavioral import BehavioralProfiler  # noqa: E402

@@ -83,9 +83,25 @@ node scripts/e2e_novatrust.mjs          # 19 steps; results are written to /tmp/
 
 Start the API fresh before every run: applications and bot flags are kept in memory, so a second run against the same server fails its first step. The detector is real, so a scripted browser can be flagged as a bot; the recovery step therefore checks that NeuroSOC returns a real decision, not that a transfer was sent. The latest results are in [`docs/DEMO_TEST_REPORT.md`](docs/DEMO_TEST_REPORT.md).
 
-## Known Issues
+## The whole suite
 
-- **Moved test files fail from `tests/01_unit/` and `tests/02_integration/`.** When the suite was reorganized, files that locate the repository root with `Path(__file__).resolve().parents[1]` (or a `sys.path` entry relative to it) were left one level too shallow, so they look for `tests/schemas/...`, `tests/ingestion-service/...` and fail to import `main`, `core` or `common`. A run over all of `tests/` therefore reports collection errors and failures that are unrelated to the code under test; the same errors occur on the unmodified upstream branch. Changing `parents[1]` to `parents[2]` in those files is the likely fix. The suites listed above are not affected.
+```bash
+pytest tests -q          # 375 passed, 1 skipped (the opt-in PyPI install check)
+```
+
+It needs no Docker, Kafka, Redis or database. Files in `tests/01_unit/`, `02_integration/` and `03_e2e/` locate the repository root with
+`Path(__file__).resolve().parents[2]` (two levels up); files directly in `tests/` use `parents[1]`. Keep that in mind when moving a test.
+
+## Deployment tests
+
+```bash
+pytest tests/test_deploy_preflight.py -q    # secret generation and every preflight check
+deployment/test_nginx_edge.sh                   # 15 checks of the nginx rules against real containers (needs Docker)
+python3 deployment/preflight.py check           # on the deployment machine, before every deploy
+```
+
+`test_nginx_edge.sh` starts two throw-away nginx containers on a private subnet and removes them afterwards; it can run next to a live stack.
+See [`deployment/README.md`](deployment/README.md).
 
 ## Troubleshooting
 - **Missing modules**: Make sure you activate your virtual environment and run `pip install -r requirements.txt`.

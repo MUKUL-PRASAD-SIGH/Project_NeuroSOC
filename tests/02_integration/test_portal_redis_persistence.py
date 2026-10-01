@@ -6,9 +6,10 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "inference-service"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "inference-service"))
 
 import main as inference_main  # noqa: E402
+from core.simulation_accounts import password_fingerprint  # noqa: E402
 
 
 class FakeRedis:
@@ -75,7 +76,7 @@ def test_session_state_survives_a_simulated_restart():
     restored_session = after_restart.get_session(identifier="victim@bank.com")
     assert restored_session is not None
     assert restored_session.failed_logins == 2
-    assert restored_session.login_passwords == {"wrong-pass-1", "wrong-pass-2"}
+    assert restored_session.login_passwords == {password_fingerprint("wrong-pass-1"), password_fingerprint("wrong-pass-2")}
     assert restored_session.sandbox_token == "sbx-token-99"
     assert restored_session.sandbox_mode == "live"
 

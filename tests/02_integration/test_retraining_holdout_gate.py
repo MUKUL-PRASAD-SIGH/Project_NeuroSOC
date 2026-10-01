@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 RETRAINING_DIR = REPO_ROOT / "retraining-service"
 sys.path.insert(0, str(RETRAINING_DIR))
 import common as retraining_common  # noqa: E402

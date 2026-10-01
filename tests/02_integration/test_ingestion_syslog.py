@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 INGESTION_DIR = REPO_ROOT / "ingestion-service"
 sys.path.insert(0, str(INGESTION_DIR))
 SCHEMA_V1_1_PATH = REPO_ROOT / "schemas" / "security-event-v1.2.schema.json"

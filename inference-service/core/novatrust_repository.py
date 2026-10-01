@@ -3,7 +3,7 @@ import uuid
 import datetime
 from typing import Any, Dict, List, Optional
 
-from core.simulation_accounts import demo_password
+from core.simulation_accounts import demo_password, hash_password, is_hashed
 try:
     import psycopg2
     from psycopg2.extras import RealDictCursor
@@ -80,6 +80,12 @@ class NovaTrustRepository:
                     )
                 """)
                 
+                # Upgrade accounts written before passwords were hashed.
+                cur.execute("SELECT email, password FROM novatrust_accounts")
+                for row in cur.fetchall():
+                    if not is_hashed(row["password"]):
+                        cur.execute("UPDATE novatrust_accounts SET password = %s WHERE email = %s", (hash_password(row["password"]), row["email"]))
+
                 # Check if empty
                 cur.execute("SELECT COUNT(*) as count FROM novatrust_accounts")
                 if cur.fetchone()["count"] == 0:
@@ -87,7 +93,7 @@ class NovaTrustRepository:
                         cur.execute("""
                             INSERT INTO novatrust_accounts (email, password, user_id, display_name, account_masked, balance)
                             VALUES (%s, %s, %s, %s, %s, %s)
-                        """, (acc["email"], acc["password"], acc["user_id"], acc["display_name"], acc["account_masked"], acc["balance"]))
+                        """, (acc["email"], hash_password(acc["password"]), acc["user_id"], acc["display_name"], acc["account_masked"], acc["balance"]))
                         
                         # Generate some dummy transactions for this user
                         for i in range(5):

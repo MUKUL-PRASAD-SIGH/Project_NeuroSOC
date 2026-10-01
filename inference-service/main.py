@@ -50,6 +50,7 @@ os.environ.setdefault("BEHAVIOR_PROFILE_DIR", str(REPO_ROOT / "data" / "behavior
 
 from core.behavioral.signals import extract_session_vector
 from core.novatrust_repository import NovaTrustRepository
+from core.simulation_accounts import password_fingerprint, verify_password
 from core.engine import DecisionEngine, ThreatVerdict
 from core.xgboost.model import CLASS_NAMES as TRAINING_CLASS_NAMES
 from core.auth import (
@@ -1089,7 +1090,7 @@ class PortalState:
             session = self._ensure_session(identifier, session_id, source_ip)
             session.login_attempts += 1
             if password:
-                session.login_passwords.add(password)
+                session.login_passwords.add(password_fingerprint(password))   # a digest, never the password
             if not authenticated:
                 session.failed_logins += 1
             self._persist(session)
@@ -3873,7 +3874,7 @@ def get_user_verdict(user_id: str, request: Request) -> dict[str, Any]:
 @app.post("/api/v1/bank/login", response_model=BankLoginResponse)
 def bank_login(request: BankLoginRequest, response: Response) -> dict[str, Any]:
     account = novatrust_repo.get_account(request.email.strip().lower())
-    authenticated = bool(account and account["password"] == request.password)
+    authenticated = bool(account and verify_password(request.password, account["password"]))
     session = portal_state.record_login_attempt(request.email, request.password, request.session_id, request.source_ip, authenticated)
 
     user_id = account["user_id"] if account else request.email.strip().lower() or "unknown-user"

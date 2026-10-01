@@ -42,6 +42,7 @@ Thumbs.db
 !/sdk/README.md
 !/sdk/python/README.md
 !/sdk/js/README.md
+!/deployment/README.md
 Docs/
 docs/*
 !/docs/DEMO_TEST_REPORT.md
@@ -82,3 +83,10 @@ datasets/processed/
 sim_*.py
 simulation_portal/
 simulation_runs/
+
+# Deployment: secrets live in $DEPLOY_HOME outside the repository; these are a safety net
+deployment/secrets/
+deployment/.env.deploy
+deployment/backups/
+*.htpasswd
+.deploy.lock

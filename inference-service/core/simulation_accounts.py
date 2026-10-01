@@ -5,6 +5,8 @@ The demo passwords are not stored in the source. Each comes from an environment 
 gets a random password that nobody knows, so it simply cannot be logged into.
 """
 
+import hashlib
+import hmac
 import logging
 import os
 import secrets
@@ -19,6 +21,39 @@ def demo_password(env_name: str) -> str:
         return value
     log.warning("%s is not set; that demo account has a random password and cannot be logged into.", env_name)
     return secrets.token_urlsafe(24)
+
+
+_SCRYPT_PREFIX = "scrypt$"
+
+
+def hash_password(password: str) -> str:
+    """A salted scrypt hash, stored instead of the password."""
+    salt = os.urandom(16)
+    digest = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2 ** 14, r=8, p=1, dklen=32)
+    return f"{_SCRYPT_PREFIX}{salt.hex()}${digest.hex()}"
+
+
+def is_hashed(stored: str) -> bool:
+    return stored.startswith(_SCRYPT_PREFIX)
+
+
+def verify_password(password: str, stored: str) -> bool:
+    """Constant-time check against a stored hash. A row that still holds a plain password (written before
+    hashing was added) is compared in constant time as well, and is upgraded to a hash on the next start."""
+    if is_hashed(stored):
+        try:
+            _, salt_hex, digest_hex = stored.split("$")
+            expected = bytes.fromhex(digest_hex)
+            actual = hashlib.scrypt(password.encode("utf-8"), salt=bytes.fromhex(salt_hex), n=2 ** 14, r=8, p=1, dklen=len(expected))
+        except ValueError:
+            return False
+        return hmac.compare_digest(actual, expected)
+    return hmac.compare_digest(password.encode("utf-8"), stored.encode("utf-8"))
+
+
+def password_fingerprint(password: str) -> str:
+    """What the brute-force counter remembers about an attempted password: only a digest, never the password."""
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
 BANK_ACCOUNTS = {

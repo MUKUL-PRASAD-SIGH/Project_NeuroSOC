@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "inference-service"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "inference-service"))
 
 import main as inference_main  # noqa: E402
 

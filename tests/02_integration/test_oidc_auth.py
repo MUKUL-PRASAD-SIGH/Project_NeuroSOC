@@ -8,7 +8,7 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "inference-service"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "inference-service"))
 
 from core.auth import (
     AuthorizationError,

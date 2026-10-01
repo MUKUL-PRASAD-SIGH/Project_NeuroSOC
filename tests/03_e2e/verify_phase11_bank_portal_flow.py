@@ -10,7 +10,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 MODELS_DIR = REPO_ROOT / "models"
 
 # The demo account password comes from the environment (core/simulation_accounts.py); this run uses its own

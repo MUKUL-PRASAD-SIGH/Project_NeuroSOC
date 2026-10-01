@@ -1,0 +1,83 @@
+name: Deploy
+
+# Validates the deployment files on every change to them, and deploys a release tag (v*) to the demo PC
+# through a self-hosted runner. See deployment/README.md for the one-time setup of the PC, the tunnel and the runner.
+#
+# The deploy job runs only for a tag whose commit is on main, never for a pull request: a self-hosted runner
+# executes repository code on the PC, so it must never run code that has not been reviewed and merged.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "deployment/**"
+      - "docker-compose.yml"
+      - "dashboard/Dockerfile"
+      - "dashboard/nginx.conf"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate the deployment files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shell scripts parse
+        run: |
+          for script in deployment/*.sh; do bash -n "$script"; done
+
+      - name: Preflight generates and accepts a deployment
+        run: |
+          python3 deployment/preflight.py --home "$RUNNER_TEMP/deploy-home" init \
+            --hostname neurosoc-ci.dev \
+            --tunnel-token "$(python3 -c "import base64,json;print(base64.b64encode(json.dumps({'a':'x','t':'y','s':'zzzzzzzz'}).encode()).decode())")"
+          python3 deployment/preflight.py --home "$RUNNER_TEMP/deploy-home" check --ci
+
+      - name: nginx rules behave (public demo, private console, no IP spoofing)
+        run: deployment/test_nginx_edge.sh
+
+      - name: The dashboard image builds for the public demo
+        uses: docker/build-push-action@v6
+        with:
+          context: ./dashboard
+          push: false
+          tags: neurosoc/dashboard:ci
+          build-args: |
+            VITE_API_URL=/
+            VITE_UNIVERSAL_ENABLED=true
+            VITE_DEMO_MODE=true
+          cache-from: type=gha,scope=dashboard-deploy
+          cache-to: type=gha,mode=max,scope=dashboard-deploy
+
+  deploy:
+    name: Deploy to the demo PC
+    needs: validate
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: [self-hosted, linux, neurosoc-pc]
+    # Create this environment in the repository settings and add yourself as a required reviewer
+    # (Settings > Environments > production-pc) so that every deployment waits for your approval.
+    environment: production-pc
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Refuse anything that is not on main
+        run: |
+          git fetch --quiet origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::$GITHUB_SHA is not on main; refusing to deploy it"; exit 1; }
+
+      - name: Deploy
+        env:
+          DEPLOY_HOME: ${{ vars.DEPLOY_HOME }}
+        run: deployment/deploy.sh

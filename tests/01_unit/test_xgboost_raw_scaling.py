@@ -8,7 +8,7 @@ import pytest
 from sklearn.preprocessing import MinMaxScaler
 
 pytest.importorskip("xgboost")
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "inference-service"))
 
 from core.xgboost.model import CLASS_NAMES, XGBoostClassifier  # noqa: E402

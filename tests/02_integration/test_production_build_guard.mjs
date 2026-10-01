@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { assertMocksDisabledForBuild } from "../scripts/productionBuildGuard.mjs";
+import { assertMocksDisabledForBuild } from "../../scripts/productionBuildGuard.mjs";
 
 test("development server permits local mock modes", () => {
   assert.doesNotThrow(() =>

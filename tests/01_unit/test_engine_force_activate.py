@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "inference-service"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "inference-service"))
 
 from core.engine import DecisionEngine  # noqa: E402
 from core.xgboost.model import XGBoostClassifier  # noqa: E402

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "inference-service"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "inference-service"))
 
 import main as inference_main  # noqa: E402
 from core.auth import OIDCConfig, OIDCValidationError  # noqa: E402
