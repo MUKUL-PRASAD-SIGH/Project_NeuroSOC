@@ -17,6 +17,8 @@ The engine behind it lives in `inference-service/core/universal` and is enabled 
         data-key="pk_live_..." data-endpoint="https://your-neurosoc-host" async></script>
 ```
 
+> **Status:** the Python package is on PyPI (`pip install neurosoc`, current release 0.1.2). The npm package `@neurosoc/sdk` has not been published yet, so the CDN address above does not resolve until it is. Until then use the bundle your NeuroSOC dashboard serves at `/neurosoc.min.js` (`<script src="https://your-dashboard-host/neurosoc.min.js" ...>`), or build it from [`js/`](js).
+
 That is the whole install. The script starts a session, records page views (including single-page-app route changes) and form submits, listens for Solana and EVM wallet connections, and maps clicks to actions using the site's rules, which are fetched from the server and edited in the dashboard, so onboarding needs no redeploy.
 
 Optional, from your own code:
@@ -33,7 +35,7 @@ if (verdict?.action === "shadow") showPendingReview();   // cosmetic: the server
 soc.consent(false);                                 // wire to your cookie banner
 ```
 
-Or install from npm: `npm i @neurosoc/sdk`, then `NeuroSOC.init({ publishableKey, endpoint })`.
+Once the npm package is published: `npm i @neurosoc/sdk`, then `NeuroSOC.init({ publishableKey, endpoint })`. Until then, copy `js/src` into your project.
 
 ## Backend: never trust the browser
 
@@ -53,6 +55,10 @@ Prefer push? Register a webhook in the dashboard; verdicts arrive signed with `X
 
 ## AI agents: guard every tool
 
+```bash
+pip install neurosoc
+```
+
 ```python
 from neurosoc import NeuroSOC, ActionBlocked
 
@@ -63,7 +69,27 @@ def transfer(to: str, amount: float, instruction_source: str = "owner"):
     ...
 ```
 
-Each call is scored before the body runs. A transfer to a never-used destination, far above the agent's usual amount, right after an instruction from outside content (the prompt-injection pattern) raises `ActionBlocked`. The check runs outside the model, so no prompt can argue past it. If NeuroSOC is unreachable, guarded tools fail closed unless you pass `fail_open=True`.
+Each call is scored before the body runs. A transfer to a never-used destination, far above the agent's usual amount, right after an instruction from outside content (the prompt-injection pattern) raises `ActionBlocked`. The check runs outside the model, so no prompt can argue past it. If NeuroSOC is unreachable (including a connection dropped mid-reply), guarded tools fail closed unless you pass `fail_open=True`.
+
+### Monitor and Protect
+
+Each application runs in **Monitor** (`observe`: decisions are recorded, nothing is blocked) or **Protect** (`enforce`). Pass `block_only_when_enforced=True` to `guard_tool` to follow the application's mode: in Monitor the tool runs and the decision is recorded, in Protect it is blocked. Verdicts carry `enforced` so you can see which mode produced them.
+
+### The agent registry
+
+An application can register the agents allowed to act for it (dashboard: Sites, Add Application, or `agents` on `POST/PUT /api/v1/universal/sites`):
+
+```json
+{ "agent_id": "novatrust-agent", "name": "Nova AI",
+  "tools": ["get_balance", "create_transfer"],
+  "sensitive_actions": ["token.transfer"],
+  "authorized_resources": ["treasury"],
+  "max_sensitive_per_minute": 10 }
+```
+
+With a registry, an agent is paused (`pause_agent`) the moment it is not registered, calls a tool that is not on its list, acts on a resource that is not authorized, or exceeds `max_sensitive_per_minute` (default 10) sensitive actions in a minute. Each stop names its reason, for example `agent rogue-agent is not registered for this application`. Without a registry only the behavioral checks above apply. `agent_id` is 2 to 63 letters, digits, `.`, `-` or `_`; `sensitive_actions` must come from the [taxonomy](../schemas/taxonomy.json); an application can register up to 20 agents.
+
+The full specification, with every field, threshold and API route, is Volume 4 of the technical documentation (*Universal SDK & Agent Guard Blueprint*).
 
 ## Keys
 
@@ -101,7 +127,8 @@ Actions come from the fixed list in [`schemas/taxonomy.json`](../schemas/taxonom
 
 ```bash
 cd sdk/js && npm install && npm run build && npm test     # dist/neurosoc.min.js, under 5 KB gzipped
-pytest tests/test_python_sdk.py tests/test_universal_*.py  # from the repo root
+pytest tests/02_integration/test_python_sdk.py tests/test_universal_agents.py   # from the repo root
+pytest tests/test_dashboard_snippets.py tests/test_dashboard_sdk_sync.py        # wizard snippets, dashboard SDK copy
 ```
 
 ## Releasing
@@ -110,8 +137,10 @@ Both packages publish from a GitHub tag through trusted publishing, so no regist
 
 | Package | Bump | Tag |
 | --- | --- | --- |
-| `neurosoc` (PyPI) | `version` in `python/pyproject.toml` and `__version__` in `python/neurosoc/__init__.py` | `git tag sdk-py-v0.1.1 && git push origin sdk-py-v0.1.1` |
-| `@neurosoc/sdk` (npm) | `version` in `js/package.json` | `git tag sdk-js-v0.1.1 && git push origin sdk-js-v0.1.1` |
+| `neurosoc` (PyPI) | `version` in `python/pyproject.toml` and `__version__` in `python/neurosoc/__init__.py` | `git tag sdk-py-v<version> && git push origin sdk-py-v<version>` |
+| `@neurosoc/sdk` (npm) | `version` in `js/package.json` | `git tag sdk-js-v<version> && git push origin sdk-js-v<version>` |
+
+Released so far: `neurosoc` 0.1.0 and 0.1.2 on PyPI (0.1.2 adds `block_only_when_enforced`, a `telemetry` argument and the dropped-connection fix). The tag must point at a commit that is on the remote and contains the version bump: a tag on a commit without the change builds the old code, and a version number cannot be reused. `@neurosoc/sdk` is not published yet (see the one-time setup below).
 
 Each workflow checks the tag matches the version, runs the tests and build, then publishes.
 

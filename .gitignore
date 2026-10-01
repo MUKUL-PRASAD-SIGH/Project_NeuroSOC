@@ -43,7 +43,10 @@ Thumbs.db
 !/sdk/python/README.md
 !/sdk/js/README.md
 Docs/
-docs/
+docs/*
+!/docs/DEMO_TEST_REPORT.md
+!/docs/demo-screenshots/
+!/docs/demo-screenshots/*.png
 builderA/
 builderB/
 builderC/

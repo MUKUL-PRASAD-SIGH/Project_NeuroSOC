@@ -20,13 +20,16 @@
 ![Keycloak](https://img.shields.io/badge/Keycloak-OIDC-4D4D4D?logo=keycloak&logoColor=white)
 
 **[Why NeuroSOC](#-why-neurosoc)** ·
-**[Architecture](#️-architecture)** ·
+**[Architecture](#architecture)** ·
 **[Features](#-platform-features)** ·
 **[Detection Engine](#-snn--lnn-hybrid-engine)** ·
-**[User Personas & Sandboxing](#-user-personas--autonomous-sandboxing)** ·
+**[User Personas & Sandboxing](#personas)** ·
+**[SDK & Demo](#-novatrust-demo-the-whole-sdk-pipeline-in-one-sandbox)** ·
+**[Models & Accuracy](#-models-and-measured-accuracy)** ·
 **[Quick Start](#-quick-start)** ·
-**[Roadmap](#-roadmap)** ·
-**[Docs](docs/)**
+**[Roadmap](#roadmap)** ·
+**[Documentation](#-documentation)** ·
+**[References](#-references)**
 
 </div>
 
@@ -47,6 +50,16 @@
 
 📘 **Detailed design doc:** [Google Docs](https://docs.google.com/document/d/1GcDYW006dY0nc87Vipmqk0Oph9lL2IFMOXp71v2yV8w/edit?tab=t.jpmwkbfntfso)
 
+▶️ **Demo video:** _link coming soon_ <!-- DEMO_VIDEO_URL: replace "_link coming soon_" with [Watch the demo](URL) when the link is ready -->
+
+**At a glance**
+
+- 🧠 **Three models, one verdict.** An SNN catches sudden bursts, an LNN follows how behavior evolves, and XGBoost makes the final call. On the public CIC-IDS2017 and CIC-DDoS2019 test data XGBoost reaches **99.6% accuracy (0.961 macro F1)** and the sequence models reach 90 to 92% ([details](#-models-and-measured-accuracy)).
+- 🧩 **A drop-in SDK for apps and AI agents.** `pip install neurosoc` (live on [PyPI](https://pypi.org/project/neurosoc/)) plus a browser script. Every agent tool call is checked before it runs, and a hijacked or unregistered agent is stopped outside the language model.
+- 🏦 **Proven end to end.** The NovaTrust demo walks the full loop (onboard, integrate, observe, analyze, decide, protect, visualize) with the real SDKs, and a browser end-to-end run passes 19 of 19 steps ([report](docs/DEMO_TEST_REPORT.md)).
+- 🔁 **Human in the loop.** Sandbox sessions and analyst decisions become labeled data; retrained models are staged as candidates and promoted only after an administrator approves.
+- 📚 **Documented in four volumes.** The [Technical Specification Series](#-documentation) covers the architecture, the detection engine, the services and APIs, and the SDK.
+
 ---
 
 ## 🧠 Why NeuroSOC
@@ -64,6 +77,8 @@ Traditional SIEMs (Splunk, QRadar, Microsoft Sentinel) and IDSs are **loud and p
 <p align="right"><a href="#top">⬆ back to top</a></p>
 
 ---
+
+<a id="architecture"></a>
 
 ## 🏗️ Architecture
 
@@ -210,12 +225,13 @@ NeuroSOC provides an end-to-end autonomous defense stack designed for modern hig
 
 | Domain | Key Capabilities | Implementation |
 |---|---|---|
-| 🧠 **Neuromorphic AI Core** | Sub-millisecond spike burst anomaly detection, continuous liquid state temporal tracking, 7-class threat classification, and heuristic tree-logic safety overrides. | Norse (LIF SNN) + Liquid Reservoir LNN + XGBoost |
+| 🧠 **Neuromorphic AI Core** | Event-driven spike-burst anomaly detection, continuous liquid-state temporal tracking, a 7-class threat taxonomy (6 classes have training data), and deterministic tree-logic safety overrides. | Norse (LIF SNN) + Liquid Reservoir LNN + XGBoost |
 | 📡 **Multi-Modal Streaming** | Real-time intake of PCAP file streams, NetFlow (UDP 2055), Linux/Unix Syslog (RFC 3164/5424 UDP 5140), and browser behavioral telemetry. | `ingestion-service` + Apache Kafka (`raw-packets`) |
 | ⚙️ **80-Feature Flow Engine** | Bidirectional TCP/UDP flow assembly, extraction of 80 statistical flow features (IAT, packet moments, flag ratios), LRU 100k flow table, deterministic MinMax scaling. | `feature-service` + `extracted-features` |
 | 🧬 **Behavioral Profiler** | Continuous per-entity baseline tracking measuring keystroke cadence, mouse entropy, temporal hours, and request speed to compute $\Delta_{\text{Behavioral}}$. | `inference-service/core/behavioral` |
-| 🪤 **Autonomous Deception** | Zero-latency stealth session diversion ($\ge 0.50$ confidence) to high-interaction honeypot with decoy accounts ($1.2M+), synthetic transfers, honey-vault, and canary tokens. | `sandbox-service` (:8001) |
+| 🪤 **Autonomous Deception** | Stealth session diversion ($\ge 0.50$ confidence) to high-interaction honeypot with decoy accounts ($1.2M+), synthetic transfers, honey-vault, and canary tokens. | `sandbox-service` (:8001) |
 | 🔁 **Closed-Loop Retraining** | Automated label harvesting from sandbox actions, cryptographic held-out regression benchmark gate, staged candidates, and audited 1-click promotion/rollback. | `feedback-service` + `retraining-service` |
+| 🧩 **SDK & Agent Guard** | Browser and Python SDKs score people, wallets and AI agents against their own baselines; an application and agent registry blocks unregistered agents, unlisted tools, unauthorized resources and sensitive-action bursts before the tool runs; Monitor and Protect modes. | `sdk/` ([`neurosoc` on PyPI](https://pypi.org/project/neurosoc/)) + `inference-service/core/universal` |
 | 📊 **Analyst & Demo Portals** | Real-time WebSocket live alert streaming, interactive threat map, candidate model promotion panel, and NovaTrust Bank dark fintech simulation portal. | `dashboard` (:3000) + `simulation_portal` (:3001) |
 | 🔐 **Zero-Trust Hardening** | Tenant-scoped append-only SHA-256 audit hash chain, Redis cross-replica atomic rate limiting, Keycloak OIDC/RBAC, and `sslmode=verify-full` TLS checks. | PostgreSQL + Redis + Keycloak (:8081) |
 | 📈 **Cloud Observability** | Standardized Prometheus `/metrics` across all services, pre-provisioned Grafana dashboards, automated alerting webhooks, and daily SMTP digests at 06:00. | Prometheus (:9090) + Grafana (:3002) |
@@ -273,6 +289,8 @@ flowchart LR
 <p align="right"><a href="#top">⬆ back to top</a></p>
 
 ---
+
+<a id="personas"></a>
 
 ## 🔁 The NeuroSOC Interactive Sandbox: User Personas
 
@@ -561,11 +579,118 @@ The CI workflow in [`.github/workflows/product-safety.yml`](.github/workflows/pr
 
 ---
 
+## 📊 Models and Measured Accuracy
+
+NeuroSOC's network path fuses three models: **SNNs catch sudden bursts, LNNs follow how behavior evolves, and XGBoost makes the final call.** Analyst decisions and sandbox sessions feed a retraining loop, and a retrained candidate is promoted only after an administrator approves it.
+
+Measured on 1 October 2026 on the CIC-IDS2017 and CIC-DDoS2019 test data (76 flow features, six classes with data), for the models in manifest 1.0.4:
+
+| | SNN | LNN | XGBoost |
+|---|---|---|---|
+| Accuracy | 0.903 | 0.920 | **0.996** |
+| Macro F1 | 0.739 | 0.749 | **0.961** |
+| Scored on | 20,000-row sample | 12,667 validation sequences | all 83,325 test rows |
+
+XGBoost is above 0.99 F1 on four of six classes (weakest: WEB_ATTACK, 0.805). The SNN and LNN catch most rare-class attacks (recall 0.76 to 0.96 on WEB_ATTACK and BOT) but with low precision (0.25 to 0.44), so macro F1, about 0.74, is the fairer headline for them. The full per-class tables are in Volume 4, section 14 of the technical documentation.
+
+**What these numbers are not:** they are results on public datasets, not on live traffic (the live Feature Service computes some flow statistics differently from the training data, and earlier tests missed live packet attacks); the three models were scored on different rows; and the human-in-the-loop retraining data is still small (137 rows in the current manifest), so continuous improvement is a design, not yet a measured result. We do not claim a novel architecture or a validated accuracy range beyond the table above.
+
+---
+
+## 📚 Documentation
+
+**Technical Specification Series** (Word documents, kept in the project's [Google Drive folder](https://drive.google.com/drive/folders/1kZnapQty0NLdxIYrU4Hc-vzrCqqcVp1g)):
+
+| Volume | Covers |
+|---|---|
+| **1. System Architecture & Operations Blueprint** | The streaming pipeline, event schema, 24-hour SOC lifecycle, persona case studies, container topology, deployment profiles and observability |
+| **2. Neuromorphic AI & Detection Engine** | The SNN, the liquid reservoir, XGBoost with tree-logic overrides, behavioral biometrics, decision fusion and the anti-poisoning retraining loop |
+| **3. Microservices, APIs & Security Blueprint** | Every service, the deception layer, the dashboard and portal, attack simulators, RBAC and the REST and WebSocket API |
+| **4. Universal SDK & Agent Guard Blueprint** | The SDKs, application and agent registry, the Agent Guard, the universal engine API, the NovaTrust demo, measured model accuracy and every project link |
+
+Volumes 1 to 3 were revised to v1.2.0 to match the code; Volume 4 is new.
+
+**Other documents**
+
+| | |
+|---|---|
+| Detailed design document | [Google Docs](https://docs.google.com/document/d/1GcDYW006dY0nc87Vipmqk0Oph9lL2IFMOXp71v2yV8w/edit) |
+| ASYNC 2026 presentation | In the Drive folder above |
+| Research manuscript | *NeuroShield: A Neuromorphic Multi-Model Cybersecurity Platform...* (unpublished; available from the team) |
+| Demo video | _link coming soon_ <!-- DEMO_VIDEO_URL --> |
+| In this repository | [SDK guide](sdk/README.md) · [Python SDK](sdk/python/README.md) · [Browser SDK](sdk/js/README.md) · [Testing guide](TESTING.md) · [Demo test report](docs/DEMO_TEST_REPORT.md) · [Feature catalog](docs/FEATURES.md) · [Production plan](docs/PRODUCTION_PLAN.md) · [Personas & sandbox](docs/USER_PERSONAS_AND_SANDBOX.md) · [Action taxonomy](schemas/taxonomy.json) |
+
+---
+
+## 🔗 Project Links
+
+Every address was checked when this section was written.
+
+**Source and collaboration**
+
+| | |
+|---|---|
+| Repository | [https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC](https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC) |
+| Issues · Pull requests · Actions | [Issues](https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC/issues) · [Pull requests](https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC/pulls) · [Actions](https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC/actions) |
+| Notable pull requests | [#11 model promotion](https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC/pull/11) · [#13 agent registry, Add Application wizard, NovaTrust demo](https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC/pull/13) |
+| Release tags | [https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC/tags](https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC/tags) |
+| License | [Apache-2.0](LICENSE) ([text](http://www.apache.org/licenses/LICENSE-2.0)) |
+
+**Packages and releases**
+
+| | |
+|---|---|
+| Python SDK | [pypi.org/project/neurosoc](https://pypi.org/project/neurosoc/) (`pip install neurosoc`, current release [0.1.2](https://pypi.org/project/neurosoc/0.1.2/)) |
+| Browser SDK on npm | `@neurosoc/sdk`: **not published yet** ([package page](https://www.npmjs.com/package/@neurosoc/sdk) and the jsDelivr CDN address work only after the first release). Until then use the bundle the dashboard serves at `/neurosoc.min.js` |
+| Release workflows | [Publish Python SDK](https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC/actions/workflows/publish-python-sdk.yml) · [Publish JS SDK](https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC/actions/workflows/publish-js-sdk.yml) · [Product safety checks](https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC/actions/workflows/product-safety.yml) |
+
+**Local endpoints** (when the stack is running)
+
+| Service | Address |
+|---|---|
+| Analyst dashboard | <http://localhost:3000> (Protection page at `/protection`) |
+| Inference Service API and interactive docs | <http://localhost:8000> · <http://localhost:8000/docs> |
+| Honeypot sandbox · NovaTrust Bank Simulation Portal | <http://localhost:8001> · <http://localhost:3001> |
+| Keycloak (local identity profile) · Prometheus · Grafana | <http://localhost:8081> · <http://localhost:9090> · <http://localhost:3002> |
+| NovaTrust customer demo (development setup above) | <http://localhost:5173/demo> · wizard at <http://localhost:5173/protection?view=sites> · API <http://localhost:8010> |
+
+---
+
+## 📖 References
+
+**Industry context** (third-party reports; their figures are the publishers', not NeuroSOC measurements)
+
+- [What is alert fatigue? (Vectra AI)](https://www.vectra.ai/topics/alert-fatigue)
+- [InsightIDR AI alert triage, vendor-reported 99.93% accuracy (Rapid7, April 2025)](https://www.rapid7.com/blog/post/2025/04/29/insightidr-ai-alert-triage-automatically-classifies-alerts-with-99-93-accuracy/)
+- [Cost of a Data Breach report (IBM)](https://www.ibm.com/reports/data-breach)
+- [Account-takeover fraud in 2025 (Expert Insights)](https://expertinsights.com/news/262-million-lost-to-account-takeover-fraud-in-2025)
+- UEBA market: [Marketintelo](https://marketintelo.com/report/ueba-market) · [GII](https://www.gii.tw/report/veri1737257-global-user-entity-behavior-analytics-ueba.html) (Chinese)
+
+**Datasets**
+
+- [CIC-IDS2017](https://www.unb.ca/cic/datasets/ids-2017.html) and [CIC-DDoS2019](https://www.unb.ca/cic/datasets/ddos-2019.html), Canadian Institute for Cybersecurity (the training data for the promoted models)
+
+**Technology documentation**
+
+| Area | Documentation |
+|---|---|
+| Machine learning | [PyTorch](https://pytorch.org/docs/stable/) · [Norse (spiking networks)](https://norse.github.io/norse/) · [XGBoost](https://xgboost.readthedocs.io/) · [scikit-learn](https://scikit-learn.org/stable/) |
+| Services | [FastAPI](https://fastapi.tiangolo.com/) · [Pydantic](https://docs.pydantic.dev/) |
+| Data and streaming | [Apache Kafka](https://kafka.apache.org/documentation/) · [PostgreSQL 15](https://www.postgresql.org/docs/15/) · [Redis](https://redis.io/docs/latest/) |
+| Identity | [Keycloak](https://www.keycloak.org/documentation) |
+| Frontend | [React](https://react.dev/) · [Vite](https://vite.dev/guide/) · [Tailwind CSS](https://tailwindcss.com/docs) · [Recharts](https://recharts.org/) · [Leaflet](https://leafletjs.com/reference.html) |
+| Operations | [Docker Compose](https://docs.docker.com/compose/) · [Prometheus](https://prometheus.io/docs/) · [Grafana](https://grafana.com/docs/) |
+| Testing | [Playwright](https://playwright.dev/docs/intro) |
+
+> Peer-reviewed research references for the SNN, LNN and XGBoost combination are not listed yet: they will be added only after each paper has been checked against its source.
+
+---
+
 ## 📁 Project Structure
 
 ```text
 Project_NeuroSOC/
-├── docs/                  # Master production plan, feature catalog & persona guides
+├── docs/                  # Production plan, feature catalog, persona guides, demo test report
 ├── ingestion-service/     # PCAP / NetFlow / bank-portal event intake → Kafka
 ├── feature-service/       # 80-feature flow extraction + scaling
 ├── inference-service/     # FastAPI core: SNN, LNN, XGBoost, behavioral profiler,
@@ -577,12 +702,14 @@ Project_NeuroSOC/
 ├── datasets/              # Dataset preprocessing
 ├── models/ · artifacts/   # Model manifests, scalers, trained weights
 ├── schemas/               # Versioned security-event JSON schemas
+├── sdk/                   # Browser SDK (js/), Python SDK (python/, PyPI: neurosoc), rule presets
 ├── dashboard/             # React analyst dashboard (Vite + Tailwind)
 ├── simulation_portal/     # NovaTrust simulated bank portal (React + TS)
 ├── attack_patterns/       # Brute force, DDoS and SQLi simulators
 ├── identity/              # Keycloak realm export
 ├── monitoring/            # Prometheus config
-├── scripts/ · tests/      # Build guards, credential scan, pytest suites
+├── scripts/ · tests/      # Build guards, credential scan, SDK sync, demo e2e and recording,
+│                          #   documentation generators, pytest suites
 └── docker-compose.yml
 ```
 
@@ -596,10 +723,14 @@ Project_NeuroSOC/
 | **Services** | FastAPI, Uvicorn, kafka-python, asyncpg |
 | **Event pipeline** | Apache Kafka, PostgreSQL, Redis |
 | **Frontends** | React 18, Vite, Tailwind CSS, Recharts, Leaflet |
+| **SDKs** | TypeScript browser SDK (esbuild), Python SDK (standard library only), published to PyPI |
 | **Identity** | Keycloak (OIDC, RBAC) |
 | **Ops** | Docker Compose, Prometheus, Grafana, GitHub Actions |
+| **Testing** | pytest, Node test runner, Playwright (browser end-to-end) |
 
 ---
+
+<a id="roadmap"></a>
 
 ## 🗺️ Roadmap & Master Production Plan
 
