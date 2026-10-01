@@ -2,6 +2,8 @@ import logging
 import uuid
 import datetime
 from typing import Any, Dict, List, Optional
+
+from core.simulation_accounts import demo_password
 try:
     import psycopg2
     from psycopg2.extras import RealDictCursor
@@ -14,7 +16,7 @@ log = logging.getLogger(__name__)
 INITIAL_ACCOUNTS = [
     {
         "email": "normal1@novatrust.com",
-        "password": "password123",
+        "password": demo_password("NOVATRUST_DEMO_PASSWORD_ALICE"),
         "user_id": "alice",
         "display_name": "Alice Johnson",
         "account_masked": "****4521",
@@ -22,7 +24,7 @@ INITIAL_ACCOUNTS = [
     },
     {
         "email": "normal2@novatrust.com",
-        "password": "secure456",
+        "password": demo_password("NOVATRUST_DEMO_PASSWORD_BOB"),
         "user_id": "bob",
         "display_name": "Bob Carter",
         "account_masked": "****8314",
@@ -30,7 +32,7 @@ INITIAL_ACCOUNTS = [
     },
     {
         "email": "admin@novatrust.com",
-        "password": "Admin@2024!",
+        "password": demo_password("NOVATRUST_DEMO_PASSWORD_CAROL"),
         "user_id": "carol",
         "display_name": "Carol Admin",
         "account_masked": "****1108",
