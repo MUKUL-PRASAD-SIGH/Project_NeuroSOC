@@ -562,10 +562,9 @@ table(doc, ["Suite", "Result", "Covers"], [
 ], [3100, 1700, 4560])
 para(doc, "Total for these suites: 73 passed and 1 skipped (pytest), 6 passed (Node). The dashboard builds with vite build.")
 callout(doc, "NOTE", "Whole-repository run",
-        "Running pytest over the entire tests/ folder gives 130 passed, 25 failed, 24 errors, 1 skipped. The failures and errors are in test files that were moved "
-        "into tests/01_unit/ and tests/02_integration/ and still locate the repository root one folder too shallow, so they look for paths such as tests/schemas/... "
-        "and tests/ingestion-service/.... The collection errors also occur on the untouched upstream branch tip, and none of the suites listed above is affected. "
-        "Changing parents[1] to parents[2] in those files is the likely fix; it is not part of this work.")
+        "Running pytest over the entire tests/ folder gives 375 passed and 1 skipped. Earlier it reported 25 failures and 24 errors because the test files moved into "
+        "tests/01_unit/, 02_integration/ and 03_e2e/ located the repository root one folder too shallow (parents[1] instead of parents[2]); that was fixed together with the "
+        "deployment work, and the job that runs this suite in GitHub Actions is green again.")
 h2(doc, "10.2 Browser End-to-End Run")
 para(doc, "scripts/e2e_novatrust.mjs drives headless Chrome through the dashboard and NovaTrust against a real API and the Vite dev server, with no mocks and no Docker. "
           "It starts a proxy on the port the demo backend uses to reach NeuroSOC so it can cut that connection for the outage step. Result on the final code: 19 of 19 steps passed.")
@@ -786,6 +785,47 @@ table(doc, ["Topic", "Manuscript", "As built (this volume and Volume 2)"], [
 ], [1900, 3700, 3760])
 para(doc, "The manuscript's statement that this is the first application of liquid neural networks to cybersecurity is not supported by this documentation and is not repeated here. "
           "Its reference list has not been verified against the sources, and no research citations beyond those in section 13 are claimed in this volume.")
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+h1(doc, "15. Deployment of the Public Demo")
+para(doc, "The demo can be run on a spare PC and published through a Cloudflare Tunnel, so no router port is opened and the home IP address stays hidden. "
+          "The files are in the deploy/ folder and the step-by-step guide is deploy/README.md. This is a hardened public demo, not a production deployment: the NovaTrust "
+          "demo refuses to run with APP_ENV=production, so the stack runs in local mode and the analyst console is protected by a password at the edge instead of Keycloak.")
+h2(doc, "15.1 Components")
+caption(doc, "Table: Deployment Files")
+table(doc, ["File", "Purpose"], [
+    ["deploy/docker-compose.deploy.yml", "Overlay on docker-compose.yml: publishes no host port, builds the dashboard for the public demo, loads a generated seed file with fresh application keys, adds health checks, capped logs and the cloudflared tunnel container (pinned image)."],
+    ["deploy/nginx.deploy.conf", "The front door: restores the real visitor address from the tunnel, rate-limits the public APIs per visitor, keeps the analyst console behind basic auth, closes /ingest, adds security headers."],
+    ["deploy/preflight.py", "init creates the settings, secrets, seed file and analyst login outside the repository (mode 600); check validates files, values, host (Docker, RAM, disk) and the rendered compose configuration, including that no service publishes a port."],
+    ["deploy/deploy.sh", "Preflight, remember the running images, build, start, wait for health, smoke-test, and roll back to the remembered images if anything fails."],
+    ["deploy/backup.sh", "Compressed database backup, last 14 kept."],
+    ["deploy/test_nginx_edge.sh", "Tests the nginx rules against real containers on a private subnet."],
+    [".github/workflows/deploy.yml", "Validates the deployment files on every change; deploys a v* tag through a self-hosted runner on the PC, only for commits on main, behind an approval environment."],
+], [3100, 6260])
+h2(doc, "15.2 What Is Public and What Is Private")
+caption(doc, "Table: Exposure of Each Surface")
+table(doc, ["Surface", "Reachable by", "Protection"], [
+    ["/demo, its static files, /health", "Anyone", "Read-only application"],
+    ["/api/v1/sdk/*", "Anyone holding the demo's publishable key, from the registered origin", "Site key and origin check; 20 requests a second per visitor"],
+    ["/api/v1/demo/*", "Anyone", "Acts only on a per-browser fake account; same rate limit"],
+    ["/protection, /api/v1/universal/*, alerts, models, WebSockets", "Holders of the analyst login", "nginx basic auth"],
+    ["/ingest", "No one", "Closed (404)"],
+    ["Redis, Kafka, PostgreSQL, the API, the sandbox", "Only containers on the Docker networks", "No host ports published; verified by preflight"],
+], [3300, 3300, 2760])
+para(doc, "Visitors' addresses come from Cloudflare's CF-Connecting-IP header, trusted only from the tunnel container's fixed address on the proxy network. Without that, every visitor "
+          "would appear to be one client behind the tunnel: they would share a single rate limit and the bot-farm detector would link unrelated visitors by 'the same IP'.")
+h2(doc, "15.3 Hardening Included")
+bullets(doc, [
+    ("Secrets", "Generated randomly per deployment into a folder outside the repository, with checks for placeholders, short values and loose file permissions. The sample application keys in sdk/sites.local.json are never loaded."),
+    ("Bank-portal passwords", "Stored as salted scrypt hashes and compared in constant time; rows written earlier in plain text still verify and are upgraded on start. The brute-force counter keeps only a digest of each attempted password instead of the password."),
+    ("Ports", "None published; this also closes Redis, Kafka and PostgreSQL to the local network, which the development stack exposes."),
+    ("Pipeline", "A deployment waits for an approver, runs only tags on main, and rolls back automatically when a health check or smoke test fails."),
+])
+h2(doc, "15.4 Verification and Limits")
+para(doc, "Tested: the secret generation and every preflight rule (tests/test_deploy_preflight.py); the nginx behavior against real containers, 15 checks including that a spoofed CF-Connecting-IP is ignored "
+          "from anywhere but the tunnel; that the rendered compose configuration publishes no port; that the generated seed file loads into the API; and the whole test suite (375 passed, 1 skipped). "
+          "Not verified: a complete first deployment with a real Cloudflare tunnel (it needs the owner's account), the self-hosted runner, and the automatic rollback path. "
+          "Known limits: one shared analyst password rather than per-person accounts; plain HTTP between containers; Redis and Kafka have no passwords because they are unreachable from outside; the demo's live state is recreated from the seed file on restart.")
 
 doc.add_paragraph()
 para(doc, "End of Volume 4.")

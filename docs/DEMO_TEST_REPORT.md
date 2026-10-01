@@ -36,9 +36,9 @@ Screenshots from this run are in `docs/demo-screenshots/`: the empty Application
 | `npm test` in `sdk/js` | 6 passed |
 | `vite build` in `dashboard` | builds |
 | `NEUROSOC_TEST_PYPI=1 pytest tests/test_dashboard_snippets.py` | passes: the wizard's Python snippet runs against the package installed from PyPI (0.1.2) |
-| `pytest tests` (the whole folder) | 130 passed, 25 failed, 24 errors, 1 skipped (see below) |
+| `pytest tests` (the whole folder) | 375 passed, 1 skipped (after the test-layout fix described below) |
 
-**The whole-folder failures are not from this work.** Test files moved into `tests/01_unit/` and `tests/02_integration/` still find the repository root one folder too shallow, so they look for `tests/schemas/...` and `tests/ingestion-service/...` and cannot import `main`, `core` or `common`. The collection errors also occur on the unmodified upstream branch. See *Known Issues* in `TESTING.md`.
+**Earlier whole-folder failures were a test-layout bug, since fixed.** When the tests were moved into `tests/01_unit/`, `02_integration/` and `03_e2e/`, files that find the repository root with `parents[1]` ended up one level too shallow, so a run of `tests/` showed 25 failures and 24 errors that had nothing to do with the code under test. Changing them to `parents[2]` made the whole suite pass (375 passed, 1 skipped).
 
 ## What the runs showed
 
