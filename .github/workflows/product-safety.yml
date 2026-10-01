@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Test production build guards
-        run: node --test tests/test_production_build_guard.mjs
+        run: node --test tests/02_integration/test_production_build_guard.mjs
       - name: Scan production paths for known demo credentials
         run: python scripts/check_production_credential_patterns.py
 

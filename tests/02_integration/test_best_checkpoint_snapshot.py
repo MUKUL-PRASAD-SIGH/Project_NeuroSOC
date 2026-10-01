@@ -18,7 +18,7 @@ def test_state_dict_is_live_so_snapshots_must_copy():
 def test_training_scripts_snapshot_with_deepcopy():
     from pathlib import Path
 
-    root = Path(__file__).resolve().parents[1] / "retraining-service"
+    root = Path(__file__).resolve().parents[2] / "retraining-service"
     for name in ("train_snn.py", "train_lnn.py"):
         source = (root / name).read_text()
         assert "copy.deepcopy(" in source and "import copy" in source, name

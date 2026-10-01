@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SERVICE_MODULES = (
     ("inference-service/core/kafka_security.py", "neurosoc_test_inference_kafka_security"),
     ("ingestion-service/kafka_security.py", "neurosoc_test_ingestion_kafka_security"),

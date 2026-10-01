@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 FEEDBACK_DIR = REPO_ROOT / "feedback-service"
 RETRAINING_DIR = REPO_ROOT / "retraining-service"
 

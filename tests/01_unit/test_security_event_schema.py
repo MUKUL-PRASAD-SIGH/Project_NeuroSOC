@@ -8,9 +8,9 @@ import pytest
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 
 
-SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "security-event-v1.schema.json"
-SCHEMA_V1_1_PATH = Path(__file__).resolve().parents[1] / "schemas" / "security-event-v1.1.schema.json"
-SCHEMA_V1_2_PATH = Path(__file__).resolve().parents[1] / "schemas" / "security-event-v1.2.schema.json"
+SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "security-event-v1.schema.json"
+SCHEMA_V1_1_PATH = Path(__file__).resolve().parents[2] / "schemas" / "security-event-v1.1.schema.json"
+SCHEMA_V1_2_PATH = Path(__file__).resolve().parents[2] / "schemas" / "security-event-v1.2.schema.json"
 
 
 @pytest.fixture

@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 INFERENCE_DIR = REPO_ROOT / "inference-service"
 FEATURE_DIR = REPO_ROOT / "feature-service"
 sys.path.insert(0, str(INFERENCE_DIR))
