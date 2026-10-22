@@ -31,7 +31,7 @@ jobs:
       - name: Test
         run: |
           pip install -r inference-service/requirements.txt pytest
-          pytest tests/test_python_sdk.py -q
+          pytest tests/02_integration/test_python_sdk.py -q
       - name: Build
         working-directory: sdk/python
         run: |
