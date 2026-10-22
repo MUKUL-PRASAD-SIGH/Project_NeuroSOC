@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Orbit · Markets</title><link rel="stylesheet" href="/style.css">
+{{SDK_TAG}}
+</head><body>
+<header class="nav"><a class="logo" href="/"><i></i>Orbit</a>
+<nav class="links"><a href="/app/markets" data-link>Markets</a><a href="/app/portfolio" data-link>Portfolio</a><a href="#/settings">Settings (hash)</a></nav></header>
+<main><h1 id="title">Markets</h1><div id="view"></div></main>
+<script>
+// A tiny single-page app: history routes and a hash route.
+function markets() {
+  return '<div class="grid">'
+    + '<section class="card" data-token="ORB" data-amount="50"><h2>ORB / USDC</h2><p>Orbit governance token.</p><button id="buy-orb">Buy ORB</button></section>'
+    + '<section class="card" data-token="NOVA" data-amount="12"><h2>NOVA / USDC</h2><p>Rewards token.</p><button id="swap-nova">Swap to NOVA</button></section>'
+    + '<section class="card" id="long-card"><h2>Why buy now?</h2><p>This long marketing block mentions buy and swap many times over several sentences so it must never be mistaken for a button even though a click inside it bubbles up.</p></section></div>';
+}
+function render() {
+  const settings = location.hash.startsWith('#/settings');
+  const path = location.pathname;
+  document.getElementById('title').textContent = settings ? 'Settings' : (path.split('/').pop() || 'Markets');
+  document.getElementById('view').innerHTML = settings ? '<section class="card"><h2>Settings</h2><p>Hash-routed view.</p></section>'
+    : path === '/app/portfolio' ? '<section class="card"><h2>Portfolio</h2><table><tr><th>Asset</th><th>Balance</th></tr><tr><td>ORB</td><td>120.0</td></tr></table></section>' : markets();
+}
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('[data-link]'); if (!a) return;
+  e.preventDefault(); history.pushState({}, '', a.getAttribute('href')); render();
+});
+window.addEventListener('popstate', render); window.addEventListener('hashchange', render); render();
+</script></body></html>

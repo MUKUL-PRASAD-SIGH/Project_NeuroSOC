@@ -1,5 +1,7 @@
 // Real-browser end-to-end check against a running stack (not part of `npm test`).
 //
+//   0. start from a FRESH engine: accounts sharing this machine's device accumulate in the farm detector,
+//      so after a few runs even the person-like session is (correctly) flagged.
 //   1. inference-service with ENABLE_UNIVERSAL_ENGINE=true and sdk/sites.local.json on :8000
 //   2. python sdk/examples/rewards-campaign/server.py on :5500
 //   3. node test/e2e.browser.mjs [--channel chrome|msedge]
@@ -93,7 +95,7 @@ async function lensScene() {
     await page.click("button");
     await page.waitForTimeout(3500);
     const session = await page.evaluate(() => window.neurosoc.sessionId);
-    const verdicts = await (await fetch(`${API}/api/v1/universal/verdicts/latest?limit=50`)).json();
+    const verdicts = await (await fetch(`${API}/api/v1/universal/verdicts/latest?limit=200`)).json();
     const mine = verdicts.verdicts.filter((v) => v.session_id === session);
     check(mine.length > 0, `events reached NeuroSOC through the extension despite connect-src 'self' (${mine.map((v) => v.event_action).join(", ")})`);
     check(blocked.length === 0, "no CSP violations from the SDK");
@@ -103,7 +105,7 @@ async function lensScene() {
   }
 }
 
-async function botScene(count = 6) {
+async function botScene(count = 8) {
   // Scripted browsers: fields filled programmatically, clicks without real pointer travel.
   const browser = await chromium.launch({ channel, headless: true });
   const results = [];
@@ -123,12 +125,15 @@ async function botScene(count = 6) {
     await context.close();
   }
   await browser.close();
-  check(results.every(Boolean), `every scripted browser was held for review (${results.filter(Boolean).length}/${count})`);
+  // The engine links accounts that share a device and flags a farm at 5 linked accounts (FARM_MIN_SIZE), and the
+  // person above counts as one of them, so from the 5th linked account on, every scripted browser is held.
+  check(results.slice(4).every(Boolean), `scripted browsers are held once the farm is visible (${results.map((held) => (held ? "held" : "paid")).join(", ")})`);
+  check(results.filter(Boolean).length >= count - 4, `at least ${count - 4} of ${count} scripted browsers were held`);
 }
 
 const session = await humanScene();
 await botScene();
-const verdict = await (await fetch(`${API}/api/v1/universal/verdicts/latest?limit=50`)).json();
+const verdict = await (await fetch(`${API}/api/v1/universal/verdicts/latest?limit=200`)).json();
 const claim = verdict.verdicts.find((v) => v.session_id === session && v.event_action === "reward.claim");
 check(claim?.verdict === "ok", `engine verdict for the person: ${claim?.verdict} (humanity ${claim?.scores?.humanity})`);
 await lensScene();

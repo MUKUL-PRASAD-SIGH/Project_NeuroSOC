@@ -8,7 +8,7 @@ const PAGE = `<!doctype html><html><body>
   <main data-campaign="campaign-7" data-reward="25">
     <button id="connect-wallet">Connect wallet</button>
     <button data-task="follow">Follow</button>
-    <form id="profile-form"><input name="handle"><button type="submit">Save</button></form>
+    <form id="profile-form" method="post" action="/save"><input name="handle"><button type="submit">Save</button></form>
     <button id="claim">Claim reward</button>
     <div class="card">A long marketing card that mentions buy somewhere in a sentence of text</div>
   </main></body></html>`;

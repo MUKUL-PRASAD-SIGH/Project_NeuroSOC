@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Orbit · Early Access Campaign</title><link rel="stylesheet" href="/style.css">
+{{SDK_TAG}}
+</head><body>
+<header class="nav"><a class="logo" href="/"><i></i>Orbit</a>
+<nav class="links"><a href="/" aria-current="page">Campaign</a><a href="/app">Markets</a><a href="/legacy">About</a></nav>
+<span class="pill" id="status">SDK: starting</span></header>
+<main data-campaign="early-access" data-reward="25">
+<h1>Early Access Campaign</h1><p>Connect a wallet, complete the steps, and claim <b>25 ORB</b>. One reward per person.</p>
+<ol class="steps" id="steps"><li data-step="wallet">Wallet</li><li data-step="profile">Profile</li><li data-step="tasks">Tasks</li></ol>
+<div class="grid">
+<section class="card"><h2>1 · Connect wallet</h2>
+<div class="row"><button id="connect-wallet">Connect wallet</button><span class="mono" id="wallet-address">No wallet connected</span></div></section>
+<section class="card"><h2>2 · Create account</h2>
+<form id="signup-form" method="post" action="/api/signup"><label for="handle">Handle</label><input id="handle" name="handle" autocomplete="off" required>
+<label for="why">What will you build?</label><textarea id="why" name="why" rows="2" required></textarea><button type="submit">Save profile</button></form></section>
+<section class="card"><h2>3 · Tasks</h2><div class="row"><button data-task="follow">Follow on X</button><button data-task="discord">Join Discord</button><button data-task="try">Try testnet</button></div></section>
+<section class="card"><h2>4 · Claim</h2><button class="primary" id="claim" disabled>Claim 25 ORB</button><div class="result" id="result" role="status"></div></section>
+</div>
+<div class="grid" style="margin-top:16px">
+<section class="card"><h2>Newsletter (GET form)</h2><form id="search-form" method="get" action="/"><input name="email" placeholder="you@example.com"><button>Subscribe</button></form></section>
+<section class="card"><h2>Partner form (other site)</h2><form id="external-form" method="post" action="{{EXTERNAL}}/collect"><input name="note" placeholder="Note for our partner"><button>Send to partner</button></form></section>
+</div>
+</main>
+<div class="banner" id="consent" hidden><p>We measure how you type and move to tell people from bots. Never what you type.</p>
+<button id="consent-no">Decline</button><button class="primary" id="consent-yes">Accept</button></div>
+<footer>Protected by NeuroSOC</footer>
+<script>
+const $ = (s) => document.querySelector(s);
+const state = { wallet: null, profile: false, tasks: new Set() };
+function paint() {
+  const on = { wallet: !!state.wallet, profile: state.profile, tasks: state.tasks.size === 3 };
+  document.querySelectorAll('#steps li').forEach((li) => li.classList.toggle('on', !!on[li.dataset.step]));
+  $('#claim').disabled = !(on.wallet && on.profile && on.tasks);
+}
+const sdkStatus = () => { const s = $('#status'); s.textContent = window.neurosoc ? 'SDK: active' : 'SDK: off'; s.className = 'pill ' + (window.neurosoc ? 'ok' : 'warn'); };
+sdkStatus(); window.addEventListener('neurosoc:ready', sdkStatus);
+// Consent banner wired to neurosoc.consent() (only when the page was opened with ?wait).
+// The SDK script is async, so use it through whenSdk(): it runs now if the SDK is up, else on neurosoc:ready.
+const whenSdk = (fn) => { if (window.neurosoc) fn(window.neurosoc); else window.addEventListener('neurosoc:ready', () => fn(window.neurosoc), { once: true }); };
+if (new URLSearchParams(location.search).has('wait')) {
+  const choice = localStorage.getItem('consent');
+  if (choice === 'yes') whenSdk((soc) => soc.consent(true));
+  else if (!choice) $('#consent').hidden = false;
+}
+$('#consent-yes').onclick = () => { localStorage.setItem('consent', 'yes'); whenSdk((soc) => soc.consent(true)); $('#consent').hidden = true; };
+$('#consent-no').onclick = () => { localStorage.setItem('consent', 'no'); whenSdk((soc) => soc.consent(false)); $('#consent').hidden = true; };
+// Wallet: use an injected provider when there is one, otherwise a demo address.
+$('#connect-wallet').addEventListener('click', async () => {
+  let address = null;
+  try {
+    if (window.ethereum && window.ethereum.request) address = (await window.ethereum.request({ method: 'eth_requestAccounts' }))[0];
+    else if (window.solana && window.solana.connect) address = (await window.solana.connect()).publicKey.toString();
+  } catch (e) { /* user rejected */ }
+  address = address || 'DemoWallet' + Math.random().toString(36).slice(2, 12);
+  state.wallet = address; $('#wallet-address').textContent = address.slice(0, 6) + '…' + address.slice(-4);
+  $('#connect-wallet').classList.add('done'); paint();
+});
+$('#signup-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const r = await fetch('/api/signup', { method: 'POST', body: new FormData(e.target) });
+  window.__lastSignup = await r.json(); state.profile = true;
+  const b = e.target.querySelector('button'); b.textContent = 'Saved'; b.classList.add('done'); paint();
+});
+document.querySelectorAll('[data-task]').forEach((b) => b.addEventListener('click', () => { state.tasks.add(b.dataset.task); b.classList.add('done'); paint(); }));
+$('#claim').addEventListener('click', async () => {
+  $('#claim').disabled = true;
+  const verdict = await (window.neurosoc && window.neurosoc.guard({ action: 'reward.claim', resource: { id: 'early-access', type: 'campaign', sensitivity: 'medium' }, value: { amount: 25 } }));
+  window.__lastVerdict = verdict;
+  const held = verdict && verdict.action !== 'allow';
+  const box = $('#result'); box.className = 'result ' + (held ? 'pending' : 'paid'); box.textContent = held ? 'Your claim is pending review.' : '25 ORB sent.';
+});
+</script></body></html>
