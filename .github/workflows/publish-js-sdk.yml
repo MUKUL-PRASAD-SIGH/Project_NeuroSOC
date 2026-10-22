@@ -35,6 +35,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      # Real-browser suite on the runner's preinstalled Chrome.
+      - run: BROWSER_CHANNEL=chrome npm run test:browser
       - run: npm pack
       - uses: actions/upload-artifact@v4
         with:

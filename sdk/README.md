@@ -100,8 +100,10 @@ Actions come from the fixed list in [`schemas/taxonomy.json`](../schemas/taxonom
 ## Build and test
 
 ```bash
-cd sdk/js && npm install && npm run build && npm test     # dist/neurosoc.min.js, under 5 KB gzipped
-pytest tests/test_python_sdk.py tests/test_universal_*.py  # from the repo root
+cd sdk/js && npm install && npm run build && npm test     # dist/neurosoc.min.js, about 7 KB gzipped
+pytest tests/02_integration/test_python_sdk.py tests/02_integration/test_universal_*.py  # from the repo root
+cd sdk/js && npm run test:browser   # real-browser suite: dummy site + fake API (needs Edge or Chrome; BROWSER_CHANNEL=chrome)
+node test/e2e.browser.mjs           # against a FRESH engine (python scripts/run_sdk_demo.py): accounts on one device accumulate in the engine's farm detector
 ```
 
 ## Releasing
