@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import inspect
 import json
@@ -23,6 +24,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 from urllib import error as urllib_error
+from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
 Transport = Callable[[str, str, Optional[dict]], dict]
@@ -56,7 +58,15 @@ class Verdict:
 
 
 class NeuroSOCError(RuntimeError):
-    """The NeuroSOC API could not be reached or refused the request."""
+    """The NeuroSOC API could not be reached or refused the request.
+
+    ``status`` is the HTTP status when the API answered (401 bad key, 403 origin, 422 invalid
+    event, 429 rate limited, 5xx server trouble) and ``None`` when it could not be reached.
+    """
+
+    def __init__(self, message: str, status: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 class ActionBlocked(RuntimeError):
@@ -69,27 +79,42 @@ class ActionBlocked(RuntimeError):
 
 
 class NeuroSOC:
-    def __init__(self, endpoint: str, secret_key: str, *, timeout: float = 5.0,
+    def __init__(self, endpoint: str, secret_key: str, *, timeout: float = 5.0, retries: int = 1,
                  transport: Optional[Transport] = None) -> None:
         if not secret_key.startswith("sk_"):
             raise ValueError("Use a secret key (sk_...) on servers and agents; publishable keys belong in browsers.")
+        if not endpoint.startswith(("http://", "https://")):
+            raise ValueError("endpoint must start with http:// or https://")
         self.endpoint = endpoint.rstrip("/")
         self._key = secret_key
         self._timeout = timeout
+        self._retries = max(0, retries)
         self._transport = transport or self._http
 
     # ── HTTP ──────────────────────────────────────────────────────────────
     def _http(self, method: str, path: str, body: Optional[dict]) -> dict:
+        """One request, retried on network trouble, timeouts, 429 and 5xx. Retrying is safe: events carry
+        an id the server de-duplicates, and the other calls are reads."""
+        from . import __version__  # imported late: the package defines it after importing this module
+
         data = json.dumps(body).encode("utf-8") if body is not None else None
-        req = urllib_request.Request(self.endpoint + path, data=data, method=method, headers={
-            "Content-Type": "application/json", "X-NeuroSOC-Key": self._key})
-        try:
-            with urllib_request.urlopen(req, timeout=self._timeout) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib_error.HTTPError as exc:
-            raise NeuroSOCError(f"NeuroSOC returned HTTP {exc.code} for {path}") from None
-        except (urllib_error.URLError, TimeoutError, ValueError) as exc:
-            raise NeuroSOCError(f"NeuroSOC is unreachable: {exc}") from None
+        headers = {"Content-Type": "application/json", "X-NeuroSOC-Key": self._key,
+                   "User-Agent": f"neurosoc-python/{__version__}"}
+        failure: Optional[NeuroSOCError] = None
+        for attempt in range(self._retries + 1):
+            if attempt:
+                time.sleep(min(2.0, 0.3 * 2 ** (attempt - 1)))
+            req = urllib_request.Request(self.endpoint + path, data=data, method=method, headers=headers)
+            try:
+                with urllib_request.urlopen(req, timeout=self._timeout) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib_error.HTTPError as exc:
+                failure = NeuroSOCError(f"NeuroSOC returned HTTP {exc.code} for {path}", exc.code)
+                if exc.code < 500 and exc.code != 429:
+                    break
+            except (urllib_error.URLError, TimeoutError, OSError, ValueError) as exc:
+                failure = NeuroSOCError(f"NeuroSOC is unreachable: {exc}")
+        raise failure  # type: ignore[misc]
 
     # ── events ────────────────────────────────────────────────────────────
     @staticmethod
@@ -130,7 +155,7 @@ class NeuroSOC:
 
     def session_verdict(self, session_id: str) -> Verdict:
         """The verdict for a browser session (from the hidden neurosoc_session form field)."""
-        safe = urllib_request.quote(str(session_id)[:128], safe="")
+        safe = urllib_parse.quote(str(session_id)[:128], safe="")
         return Verdict.from_payload(self._transport("GET", f"/api/v1/sdk/sessions/{safe}/verdict", None))
 
     # ── agents ────────────────────────────────────────────────────────────
@@ -151,8 +176,8 @@ class NeuroSOC:
         def decorate(tool: Callable) -> Callable:
             signature = inspect.signature(tool)
 
-            @functools.wraps(tool)
-            def wrapper(*args: Any, **kwargs: Any) -> Any:
+            def check(args: tuple, kwargs: dict) -> bool:
+                """Score the call. True: run the tool. Raises ActionBlocked when it must not run."""
                 bound = signature.bind_partial(*args, **kwargs)
                 bound.apply_defaults()
                 values = bound.arguments
@@ -168,13 +193,27 @@ class NeuroSOC:
                     )
                 except NeuroSOCError:
                     if fail_open:
-                        return tool(*args, **kwargs)
+                        return True
                     raise ActionBlocked(Verdict(verdict="unavailable", action="pause_agent",
                                                 reasons=["NeuroSOC could not be reached; failing closed"])) from None
                 if on_verdict is not None:
                     on_verdict(verdict)
                 if verdict.action in block_on:
                     raise ActionBlocked(verdict)
+                return True
+
+            if inspect.iscoroutinefunction(tool):
+                @functools.wraps(tool)
+                async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                    # The scoring call is blocking HTTP: keep it off the event loop.
+                    await asyncio.get_running_loop().run_in_executor(None, functools.partial(check, args, kwargs))
+                    return await tool(*args, **kwargs)
+
+                return async_wrapper
+
+            @functools.wraps(tool)
+            def wrapper(*args: Any, **kwargs: Any) -> Any:
+                check(args, kwargs)
                 return tool(*args, **kwargs)
 
             return wrapper

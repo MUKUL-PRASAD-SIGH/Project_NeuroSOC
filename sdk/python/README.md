@@ -43,6 +43,6 @@ if not verdict.allowed:
     ...
 ```
 
-`Verdict` carries `verdict`, `action` (`allow`, `step_up`, `shadow`, ...), `risk`, `reasons`, `verdict_id` and `session_id`. Network failures and refused requests raise `NeuroSOCError`.
+`Verdict` carries `verdict`, `action` (`allow`, `step_up`, `shadow`, ...), `risk`, `reasons`, `verdict_id` and `session_id`. Network failures and refused requests raise `NeuroSOCError` (its `.status` is the HTTP status, or `None` if the API was unreachable). Transient failures (network, timeout, 429, 5xx) are retried once (`retries=`). `guard_tool` also wraps `async def` tools without blocking the event loop.
 
 Use a secret key (`sk_...`) here, never in a browser. See the [full SDK docs](https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC/tree/main/sdk) for the browser script, rules and webhooks.
