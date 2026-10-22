@@ -23,14 +23,11 @@ function textMatches(element: Element, text: string | string[] | undefined): boo
   const label = visibleText(element);
   // Short labels only: a whole card that happens to contain "buy" somewhere is not a buy button.
   if (!label || label.length > 60) return false;
-  return wanted.some((word) => label === word || label.startsWith(word + " ") || label.includes(word));
+  return wanted.some((word) => label.includes(word));
 }
 
 /** The element a rule is about: the clicked control, or the submitted form. */
-export function findRule(rules: Rule[], event: Event, location: Location): { rule: Rule; element: Element } | null {
-  const kind = event.type === "submit" ? "submit" : "click";
-  const origin = event.target instanceof Element ? event.target : null;
-  if (!origin) return null;
+export function findRule(rules: Rule[], kind: "click" | "submit", origin: Element, location: Location): { rule: Rule; element: Element } | null {
   for (const rule of rules) {
     const match = rule.match || {};
     if ((match.event || "click") !== kind) continue;

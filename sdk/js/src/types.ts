@@ -84,7 +84,11 @@ export interface InitOptions {
   /** Start without capturing until consent(true) is called. Default false. */
   waitForConsent?: boolean;
   flushIntervalMs?: number;
+  /** Events per request, 1 to 50 (the server limit). Default 20. */
   maxBatch?: number;
+  /** Give up on a request after this long. Default 8000. */
+  timeoutMs?: number;
+  /** Log delivery problems and dropped input to the console. Key and origin rejections always warn once. */
   debug?: boolean;
   /** Send through the Lens extension instead of fetch (pages whose CSP blocks outside hosts). */
   relay?: boolean;

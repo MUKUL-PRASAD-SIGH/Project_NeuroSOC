@@ -1,6 +1,6 @@
 {
   "name": "@neurosoc/sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Drop-in behavioral security for any website: tells people from bots and bot farms, and reports to the NeuroSOC engine.",
   "license": "Apache-2.0",
   "author": "NeuroSOC Team",
@@ -21,7 +21,7 @@
     "web3"
   ],
   "type": "module",
-  "main": "./dist/index.mjs",
+  "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
   "types": "./dist/types/index.d.ts",
   "jsdelivr": "./dist/neurosoc.min.js",
@@ -29,7 +29,8 @@
   "exports": {
     ".": {
       "types": "./dist/types/index.d.ts",
-      "import": "./dist/index.mjs"
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
     },
     "./script": "./dist/neurosoc.min.js"
   },
@@ -45,6 +46,7 @@
     "build": "node build.mjs && tsc -p tsconfig.json --emitDeclarationOnly",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test test/sdk.test.mjs",
+    "test:browser": "node --test --test-concurrency=1 test/browser.test.mjs",
     "prepublishOnly": "npm run build && npm test"
   },
   "devDependencies": {

@@ -14,7 +14,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     method: "POST", headers: { "Content-Type": "text/plain;charset=UTF-8" }, body: message.body,
   };
   fetch(url, init)
-    .then(async (response) => sendResponse({ ok: response.ok, body: await response.json().catch(() => null),
+    .then(async (response) => sendResponse({ ok: response.ok, status: response.status, body: await response.json().catch(() => null),
       error: response.ok ? undefined : `HTTP ${response.status}` }))
     .catch((error) => sendResponse({ ok: false, error: String(error) }));
   return true; // answer asynchronously

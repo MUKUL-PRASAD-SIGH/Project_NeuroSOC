@@ -9,6 +9,7 @@ window.addEventListener("message", (event) => {
     window.postMessage({
       __neurosoc_reply: data.__neurosoc_request,
       ok: !failed && reply.ok,
+      status: failed ? undefined : reply.status,
       body: failed ? undefined : reply.body,
       error: failed ? String(chrome.runtime.lastError?.message || "no reply") : reply.error,
     }, window.location.origin);
