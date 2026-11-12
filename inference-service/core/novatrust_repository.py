@@ -142,6 +142,7 @@ class NovaTrustRepository:
                 cur.execute("SELECT * FROM novatrust_transactions WHERE user_id = %s ORDER BY date DESC", (user_id,))
                 rows = cur.fetchall()
                 for row in rows:
+                    row.pop("user_id", None)   # the response contract does not include it
                     row["amount"] = float(row["amount"])
                     row["date"] = row["date"].strftime("%b %d, %Y")
                     row["type"] = "credit" if row["amount"] > 0 else "debit"

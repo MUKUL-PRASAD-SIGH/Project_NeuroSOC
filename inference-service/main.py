@@ -635,6 +635,7 @@ class TransactionResponse(StrictResponseModel):
     date: StrictStr
     description: StrictStr
     amount: FiniteFloat
+    type: StrictStr | None = None   # "credit" or "debit", derived from the sign of the amount
 
 
 class BankAccountSummaryResponse(StrictResponseModel):
