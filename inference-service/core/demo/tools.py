@@ -10,7 +10,7 @@ code path to the ledger and it always passes the guard first.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from neurosoc import ActionBlocked, NeuroSOC, NeuroSOCError, Verdict  # noqa: E402  (path set up by runtime.py)

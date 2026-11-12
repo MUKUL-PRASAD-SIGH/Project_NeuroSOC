@@ -5,7 +5,7 @@ This guide provides instructions for sequentially testing the entire NeuroSOC pl
 ## Prerequisites
 
 Ensure you have the following installed and configured:
-- Python 3.9+
+- Python 3.11+
 - Docker & Docker Compose
 - Node.js (for frontend testing)
 - `pytest` for running Python test suites
@@ -34,7 +34,7 @@ pytest tests/01_unit/ -v
 Ensure services like Kafka, Redis, and internal APIs communicate correctly. 
 *Note: Make sure your local Docker services (Redis, Kafka, DB) are running.*
 ```bash
-docker-compose up -d redis kafka postgres
+docker compose up -d redis kafka postgres
 pytest tests/02_integration/ -v
 ```
 
@@ -42,14 +42,14 @@ pytest tests/02_integration/ -v
 Test complete end-to-end user journeys and system interactions.
 ```bash
 # Ensure all services are up
-docker-compose up -d
+docker compose up -d
 pytest tests/03_e2e/ -v
 ```
 
 ### Run All Tests
 To run the entire test suite sequentially:
 ```bash
-pytest tests/ -v --order-dependencies
+pytest tests/ -v
 ```
 
 ## SDK, Agent Guard and Demo Tests
@@ -86,7 +86,7 @@ Start the API fresh before every run: applications and bot flags are kept in mem
 ## The whole suite
 
 ```bash
-pytest tests -q          # 375 passed, 1 skipped (the opt-in PyPI install check)
+pytest tests -q          # everything passes; 2 skipped (opt-in checks such as the PyPI install)
 ```
 
 It needs no Docker, Kafka, Redis or database. Files in `tests/01_unit/`, `02_integration/` and `03_e2e/` locate the repository root with
@@ -104,5 +104,5 @@ python3 deployment/preflight.py check           # on the deployment machine, bef
 See [`deployment/README.md`](deployment/README.md).
 
 ## Troubleshooting
-- **Missing modules**: Make sure you activate your virtual environment and run `pip install -r requirements.txt`.
-- **Connection Refused**: Ensure `docker-compose up -d` has successfully started the required backing services before running integration and E2E tests.
+- **Missing modules**: Make sure you activate your virtual environment and run `pip install -r inference-service/requirements.txt pytest jsonschema` (the same set CI installs).
+- **Connection Refused**: Ensure `docker compose up -d` has successfully started the required backing services before running integration and E2E tests.

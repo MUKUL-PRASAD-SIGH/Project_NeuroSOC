@@ -78,7 +78,16 @@ export default function Dashboard() {
   const balance = (session.account?.balance ?? dashboardData.account.balance) - sentTotal;
   const animatedBalance = useCountUp(balance);
   const accountMasked = session.account?.accountMasked || dashboardData.account.accountMasked;
-  const backendTransactions = session.account?.transactions || [];
+  // The decoy ledger carries signed amounts and ISO timestamps but no credit/debit flag;
+  // derive both here so a payroll credit is not rendered as money going out.
+  const backendTransactions = (session.account?.transactions || []).map((transaction) => {
+    const parsed = new Date(transaction.date);
+    return {
+      ...transaction,
+      date: Number.isNaN(parsed.getTime()) ? transaction.date : parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+      type: transaction.amount >= 0 ? 'credit' : 'debit',
+    };
+  });
   const transactions = backendTransactions.length > 0 ? backendTransactions : [
     ...recentTransfers.map((transfer) => ({
       id: transfer.id,

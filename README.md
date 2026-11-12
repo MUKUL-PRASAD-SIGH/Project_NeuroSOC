@@ -222,7 +222,7 @@ flowchart TD
 
 ## 🚀 Platform Features
 
-NeuroSOC provides an end-to-end autonomous defense stack designed for modern high-velocity security operations. For the exhaustive technical specification and 80-feature contract, see [`docs/FEATURES.md`](docs/FEATURES.md).
+NeuroSOC provides an end-to-end autonomous defense stack designed for modern high-velocity security operations.
 
 | Domain | Key Capabilities | Implementation |
 |---|---|---|
@@ -378,7 +378,6 @@ sequenceDiagram
    - A **Malicious Hacker** attempts privilege escalation, downloads decoy credentials, or probes for lateral movement—generating mathematical proof of malicious intent.
 5. **🔁 Closed-Loop Feedback:** Confirmed attacker actions publish to Kafka `feedback-trigger` for continuous model retraining without manual data labeling.
 
-For full technical specifications on personas and sandboxing telemetry, see [`docs/USER_PERSONAS_AND_SANDBOX.md`](docs/USER_PERSONAS_AND_SANDBOX.md).
 
 <details>
 <summary><b>📊 Preview the morning analyst briefing</b></summary>
@@ -480,6 +479,8 @@ Test evidence: [`docs/DEMO_TEST_REPORT.md`](docs/DEMO_TEST_REPORT.md). Re-run th
 ## 🚀 Quick Start
 
 **Prerequisites:** Docker with Compose, Node.js 20+, Python 3.11+ (only for training and tests), and about 16 GB of RAM.
+
+The stack publishes its ports on `127.0.0.1` only, so nothing is reachable from your network by default. Set `HOST_BIND=0.0.0.0` in `.env` to change that (for example to receive syslog from other devices), ideally with `OIDC_REQUIRED=true`.
 
 ```bash
 git clone https://github.com/MUKUL-PRASAD-SIGH/Project_NeuroSOC.git
@@ -633,7 +634,7 @@ Volumes 1 to 3 were revised to v1.2.0 to match the code; Volume 4 is new.
 | ASYNC 2026 presentation | In the Drive folder above |
 | Research manuscript | *NeuroShield: A Neuromorphic Multi-Model Cybersecurity Platform...* (unpublished; available from the team) |
 | Demo video | [YouTube](https://youtu.be/eUf58W-rJoE) |
-| In this repository | [SDK guide](sdk/README.md) · [Python SDK](sdk/python/README.md) · [Browser SDK](sdk/js/README.md) · [Testing guide](TESTING.md) · [Demo test report](docs/DEMO_TEST_REPORT.md) · [Feature catalog](docs/FEATURES.md) · [Production plan](docs/PRODUCTION_PLAN.md) · [Personas & sandbox](docs/USER_PERSONAS_AND_SANDBOX.md) · [Action taxonomy](schemas/taxonomy.json) |
+| In this repository | [SDK guide](sdk/README.md) · [Python SDK](sdk/python/README.md) · [Browser SDK](sdk/js/README.md) · [Testing guide](TESTING.md) · [Demo test report](docs/DEMO_TEST_REPORT.md) · [Deployment guide](deployment/README.md) · [Action taxonomy](schemas/taxonomy.json) |
 
 ---
 
@@ -705,7 +706,7 @@ Every address was checked when this section was written.
 
 ```text
 Project_NeuroSOC/
-├── docs/                  # Production plan, feature catalog, persona guides, demo test report
+├── docs/                  # Demo test report and screenshots
 ├── ingestion-service/     # PCAP / NetFlow / bank-portal event intake → Kafka
 ├── feature-service/       # 80-feature flow extraction + scaling
 ├── inference-service/     # FastAPI core: SNN, LNN, XGBoost, behavioral profiler,
@@ -749,7 +750,7 @@ Project_NeuroSOC/
 
 ## 🗺️ Roadmap & Master Production Plan
 
-For the comprehensive engineering roadmap detailing current verified systems vs. future enterprise scale, see [`docs/PRODUCTION_PLAN.md`](docs/PRODUCTION_PLAN.md).
+
 
 ### ✅ What is Already Built (Production Ready)
 - [x] **Tri-Model Neuromorphic Detection Core:** SNN (Norse LIF spike burst detection) + LNN (liquid state continuous tracking) + XGBoost with deterministic tree logic overrides.

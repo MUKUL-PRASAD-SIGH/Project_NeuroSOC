@@ -1,3 +1,4 @@
+import type { DecoyLedgerTransaction } from './portalApi';
 export interface PortalAccount {
   balance?: number;
   accountMasked?: string;
@@ -5,6 +6,8 @@ export interface PortalAccount {
   expenses?: number;
   creditScore?: number;
   savingsGoal?: number;
+  // Server-side decoy ledger, present only for sandboxed sessions.
+  transactions?: DecoyLedgerTransaction[];
 }
 
 export interface PortalSandbox {

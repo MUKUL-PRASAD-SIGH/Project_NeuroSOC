@@ -38,7 +38,6 @@ import time
 import uuid
 import joblib
 from collections import OrderedDict
-from typing import Any
 
 from kafka import KafkaConsumer, KafkaProducer
 from prometheus_client import Counter, start_http_server

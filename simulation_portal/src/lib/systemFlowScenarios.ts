@@ -782,6 +782,7 @@ async function runFlaggedButInnocentScenario(hooks: ScenarioHooks = {}): Promise
     {
       browser: buildBrowser(
         'amber',
+        'Decision engine',
         'Decision layer chose a soft hold',
         'The session looks suspicious, but not hostile enough for the hard sandbox.',
         [
@@ -820,6 +821,7 @@ async function runFlaggedButInnocentScenario(hooks: ScenarioHooks = {}): Promise
       route,
       browser: buildBrowser(
         'amber',
+        'NovaTrust portal',
         'Security timeout wall',
         'The transfer path pauses and the session is asked to reload.',
         [

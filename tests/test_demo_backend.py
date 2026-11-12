@@ -34,6 +34,19 @@ async def _allow_ws(_websocket) -> bool:
     return True
 
 
+def _from_address(app, address):
+    """Serve ``app`` as if every request came from ``address``.
+
+    Newer Starlette releases accept ``TestClient(app, client=...)``; the version pinned through
+    fastapi==0.111.0 does not, so set the ASGI client address directly and work on both.
+    """
+    async def wrapped(scope, receive, send):
+        if scope["type"] in ("http", "websocket"):
+            scope = dict(scope, client=tuple(address))
+        await app(scope, receive, send)
+    return wrapped
+
+
 def make_stack(mode: str = "enforce", agents=None, factory=None, client_address=("127.0.0.1", 50000)):
     kv = MemoryKV()
     registry = SiteRegistry(kv)
@@ -58,7 +71,7 @@ def make_stack(mode: str = "enforce", agents=None, factory=None, client_address=
     app = FastAPI()
     app.include_router(build_router(engine, registry, hooks,
                                     extra_routers=(build_demo_router(runtime, tenant_of=lambda r: "local"),)))
-    holder["client"] = TestClient(app, client=client_address)
+    holder["client"] = TestClient(_from_address(app, client_address))
     return {"client": holder["client"], "site": site, "secret": secret, "runtime": runtime, "engine": engine,
             "registry": registry, "app": app}
 

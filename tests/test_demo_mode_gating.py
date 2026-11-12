@@ -17,7 +17,14 @@ SCRIPT = textwrap.dedent(
     from fastapi.testclient import TestClient
     import main
 
-    client = TestClient(main.app, client=("127.0.0.1", 50000))
+    async def local_app(scope, receive, send):
+        # Present every request as coming from localhost; works on Starlette versions with and
+        # without TestClient(client=...).
+        if scope["type"] in ("http", "websocket"):
+            scope = dict(scope, client=("127.0.0.1", 50000))
+        await main.app(scope, receive, send)
+
+    client = TestClient(local_app)
     session = {"X-Demo-Session": "session-gating-1"}
     results = {
         "config": client.get("/api/v1/demo/config").status_code,

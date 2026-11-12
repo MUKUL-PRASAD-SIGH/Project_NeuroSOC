@@ -24,7 +24,7 @@ for _candidate in ("/sdk/python", str(Path(__file__).resolve().parents[3] / "sdk
     if Path(_candidate, "neurosoc").is_dir() and _candidate not in sys.path:
         sys.path.append(_candidate)
 
-from neurosoc import ActionBlocked, NeuroSOC, NeuroSOCError  # noqa: E402
+from neurosoc import NeuroSOC, NeuroSOCError  # noqa: E402
 
 from core.universal.engine import UniversalEngine  # noqa: E402
 from core.universal.ingest import SdkEvent, normalize  # noqa: E402
@@ -33,7 +33,7 @@ from core.universal.store import get_json  # noqa: E402
 
 from .account import ACCOUNT_ID, Account, SessionStore, TransferNotFound  # noqa: E402
 from .planner import AgentReply, ScriptedPlanner, compose, money, select_planner  # noqa: E402
-from .tools import (AGENT_ID, READ_TOOLS, TOOL_NAMES, TREASURY, UNAUTHORIZED_RESOURCE, NovaTools, Step,
+from .tools import (AGENT_ID, TREASURY, UNAUTHORIZED_RESOURCE, NovaTools, Step,
                     summarize)
 
 log = logging.getLogger(__name__)

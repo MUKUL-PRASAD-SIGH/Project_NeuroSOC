@@ -39,6 +39,7 @@ Thumbs.db
 # Documentation: only the root README.md is published
 *.md
 !/README.md
+!/TESTING.md
 !/sdk/README.md
 !/sdk/python/README.md
 !/sdk/js/README.md
@@ -81,7 +82,6 @@ datasets/processed/
 
 # Simulation files and runs
 sim_*.py
-simulation_portal/
 simulation_runs/
 
 # Deployment: secrets live in $DEPLOY_HOME outside the repository; these are a safety net
@@ -90,3 +90,7 @@ deployment/.env.deploy
 deployment/backups/
 *.htpasswd
 .deploy.lock
+
+# Local Playwright recordings and per-machine MCP config
+demo-video/
+.playwright-mcp.json
