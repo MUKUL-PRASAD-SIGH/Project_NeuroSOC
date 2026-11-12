@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -409,6 +410,13 @@ class SandboxManager:
             SESSIONS_ACTIVE.set(self.repository.count_active_sessions())
         except Exception as exc:
             log.warning("Could not seed the active sandbox session gauge: %s", exc)
+        self._ensure_producer()
+
+    def _ensure_producer(self) -> KafkaProducer | None:
+        # Containers restarted by the Docker daemon skip the compose healthcheck gate, so Kafka
+        # may not be up yet at startup. Retry lazily instead of disabling publishing for good.
+        if self._producer is not None:
+            return self._producer
         try:
             self._producer = KafkaProducer(
                 bootstrap_servers=KAFKA_BOOTSTRAP,
@@ -417,9 +425,11 @@ class SandboxManager:
                 acks="all",
                 retries=3,
             )
+            log.info("Kafka producer connected for feedback-trigger publishing.")
         except Exception as exc:
             self._producer = None
             log.warning("Kafka producer unavailable for feedback-trigger publishing: %s", exc)
+        return self._producer
 
     def stop(self) -> None:
         if self._producer is not None:
@@ -466,8 +476,9 @@ class SandboxManager:
         session = self.repository.terminate_session(sandbox_token)
         if session:
             SESSIONS_ACTIVE.dec()
-        if session and self._producer is not None:
-            self._producer.send(
+        producer = self._ensure_producer() if session else None
+        if producer is not None:
+            producer.send(
                 FEEDBACK_TRIGGER_TOPIC,
                 {
                     "session_id": session["session_id"],
@@ -475,7 +486,7 @@ class SandboxManager:
                     "ended_at": str(session["ended_at"]),
                 },
             )
-            self._producer.flush(timeout=3)
+            producer.flush(timeout=3)
         return session
 
     def expire_sessions(self) -> int:
@@ -870,7 +881,7 @@ async def sandbox_token_middleware(request: Request, call_next):
             return JSONResponse(status_code=503, content={"detail": "Service authentication is unavailable"})
         if SANDBOX_SERVICE_TOKEN:
             provided = request.headers.get("x-service-token", "")
-            if provided != SANDBOX_SERVICE_TOKEN:
+            if not hmac.compare_digest(provided.encode("utf-8"), SANDBOX_SERVICE_TOKEN.encode("utf-8")):
                 return JSONResponse(status_code=401, content={"detail": "Missing or invalid service token"})
         return await call_next(request)
 

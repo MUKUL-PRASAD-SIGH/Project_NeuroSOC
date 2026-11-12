@@ -1,7 +1,7 @@
 kafka-python==2.0.2
 PyJWT[crypto]==2.9.0
 fastapi==0.111.0
-uvicorn[standard]==0.29.0
+uvicorn[standard]==0.32.1
 asyncpg==0.29.0
 redis==5.0.4
 numpy==1.26.4

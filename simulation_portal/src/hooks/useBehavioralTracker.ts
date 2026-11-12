@@ -1,7 +1,8 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { postBehavioral } from '../lib/portalApi';
 
-export interface BehavioralEvent {
+// A type alias (not an interface) so events are assignable to the API's Record<string, unknown>[].
+export type BehavioralEvent = {
   type: string;
   timestamp: number;
   x?: number;
@@ -10,7 +11,7 @@ export interface BehavioralEvent {
   target?: string;
   scrollX?: number;
   scrollY?: number;
-}
+};
 
 export interface BehavioralTrackerOptions {
   userId?: string;

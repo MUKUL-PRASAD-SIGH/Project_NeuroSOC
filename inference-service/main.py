@@ -173,7 +173,9 @@ def _parse_trusted_proxy_ips(value: str) -> str:
             network = ipaddress.ip_network(entry, strict=False)
         except ValueError as exc:
             raise RuntimeError("TRUSTED_PROXY_IPS must contain valid IP addresses or CIDRs.") from exc
-        value = str(network)
+        # A single address is emitted bare ("172.30.0.10", not "172.30.0.10/32") so it matches
+        # under every uvicorn release; real CIDR ranges need uvicorn >= 0.32 (see requirements.txt).
+        value = str(network.network_address) if network.num_addresses == 1 else str(network)
         if value not in normalized:
             normalized.append(value)
     return ",".join(normalized)

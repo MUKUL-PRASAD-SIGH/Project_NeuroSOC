@@ -14,10 +14,13 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
+import os
 import re
 import secrets
+import socket
 import threading
 import time
 import uuid
@@ -37,6 +40,49 @@ APP_TYPES = {"web", "agent", "both"}
 MAX_AGENTS = 20
 MAX_TOOLS = 50
 MAX_RESOURCES = 50
+
+
+def _private_webhooks_allowed() -> bool:
+    return os.getenv("UNIVERSAL_WEBHOOK_ALLOW_PRIVATE", "false").strip().lower() in {"1", "true", "yes"}
+
+
+def check_webhook_target(url: str) -> None:
+    """Raise ValueError unless ``url`` is an http(s) URL whose host resolves only to public addresses.
+
+    The inference service sends webhooks from inside the deployment network, so a URL pointing at
+    loopback, a private range or the cloud metadata address would let whoever registers it reach
+    internal services. Set UNIVERSAL_WEBHOOK_ALLOW_PRIVATE=true for a local receiver during development.
+    """
+    parts = urlsplit(url)
+    if parts.scheme not in {"http", "https"}:
+        raise ValueError("Webhook URL must be http or https")
+    host = parts.hostname
+    if not host:
+        raise ValueError("Webhook URL must include a host")
+    if parts.username or parts.password:
+        raise ValueError("Webhook URL must not include credentials")
+    if _private_webhooks_allowed():
+        return
+    try:
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError, ValueError):
+        raise ValueError("Webhook host could not be resolved") from None
+    for info in infos:
+        address = ipaddress.ip_address(info[4][0].split("%", 1)[0])
+        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+            address = address.ipv4_mapped
+        if not address.is_global or address.is_multicast:
+            raise ValueError("Webhook URL must point to a public address")
+
+
+class _NoRedirect(urllib_request.HTTPRedirectHandler):
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:  # a redirect could lead back inside
+        return None
+
+
+_webhook_opener = urllib_request.build_opener(_NoRedirect)
+
 AGENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{1,62}$")
 TOOL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,63}$")
 RESOURCE_RE = re.compile(r"^[A-Za-z0-9_.:/-]{1,128}$")
@@ -270,8 +316,7 @@ class SiteRegistry:
         site = self.get(site_id)
         if site is None:
             return None
-        if urlsplit(url).scheme not in {"http", "https"}:
-            raise ValueError("Webhook URL must be http or https")
+        check_webhook_target(url)
         signing_secret = "whsec_" + secrets.token_urlsafe(24)
         site.setdefault("webhooks", []).append({"url": url, "secret": signing_secret})
         self._save(site)
@@ -307,7 +352,8 @@ def deliver_webhooks(site: dict[str, Any], verdict: dict[str, Any]) -> None:
             request = urllib_request.Request(hook["url"], data=body, method="POST", headers={
                 "Content-Type": "application/json", "X-NeuroSOC-Signature": f"sha256={signature}"})
             try:
-                with urllib_request.urlopen(request, timeout=5):
+                check_webhook_target(hook["url"])  # re-checked at send time: DNS may have changed
+                with _webhook_opener.open(request, timeout=5):
                     pass
             except (urllib_error.URLError, urllib_error.HTTPError, TimeoutError, ValueError) as exc:
                 log.warning("Webhook delivery to %s failed: %s", urlsplit(hook["url"]).hostname, type(exc).__name__)

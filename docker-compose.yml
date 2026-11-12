@@ -21,7 +21,7 @@ services:
     image: confluentinc/cp-zookeeper:7.5.0
     networks: [neuroshield-net]
     ports:
-      - "2181:2181"
+      - "${HOST_BIND:-127.0.0.1}:2181:2181"
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
@@ -33,8 +33,8 @@ services:
       - neuroshield-net
       - sandbox-net
     ports:
-      - "9092:9092"
-      - "29092:29092"
+      - "${HOST_BIND:-127.0.0.1}:9092:9092"
+      - "${HOST_BIND:-127.0.0.1}:29092:29092"
     depends_on:
       - zookeeper
     environment:
@@ -62,7 +62,7 @@ services:
       - neuroshield-net
       - sandbox-net
     ports:
-      - "55432:5432"
+      - "${HOST_BIND:-127.0.0.1}:55432:5432"
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-neuroshield}
       POSTGRES_USER: ${POSTGRES_USER:-ns_user}
@@ -82,7 +82,7 @@ services:
     command: start-dev --import-realm
     networks: [neuroshield-net]
     ports:
-      - "127.0.0.1:8081:8080"
+      - "${HOST_BIND:-127.0.0.1}:8081:8080"
     volumes:
       - ./identity/realm-export.json:/opt/keycloak/data/import/neurosoc-realm.json:ro
     environment:
@@ -94,7 +94,7 @@ services:
     image: redis:7-alpine
     networks: [neuroshield-net]
     ports:
-      - "6379:6379"
+      - "${HOST_BIND:-127.0.0.1}:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -109,8 +109,8 @@ services:
     build: ./ingestion-service
     networks: [neuroshield-net]
     ports:
-      - "${INGESTION_HTTP_HOST_PORT:-8082}:8080"
-      - "${INGESTION_SYSLOG_HOST_PORT:-5141}:5140/udp"
+      - "${HOST_BIND:-127.0.0.1}:${INGESTION_HTTP_HOST_PORT:-8082}:8080"
+      - "${HOST_BIND:-127.0.0.1}:${INGESTION_SYSLOG_HOST_PORT:-5141}:5140/udp"
     depends_on:
       kafka:
         condition: service_healthy
@@ -167,7 +167,7 @@ services:
         aliases:
           - inference-proxy
     ports:
-      - "8000:8000"
+      - "${HOST_BIND:-127.0.0.1}:8000:8000"
     depends_on:
       kafka:
         condition: service_healthy
@@ -189,6 +189,7 @@ services:
       # NeuroSOC SDK / universal behavioral engine (off unless set in .env)
       ENABLE_UNIVERSAL_ENGINE: ${ENABLE_UNIVERSAL_ENGINE:-false}
       UNIVERSAL_HASH_SECRET: ${UNIVERSAL_HASH_SECRET:-}
+      UNIVERSAL_WEBHOOK_ALLOW_PRIVATE: ${UNIVERSAL_WEBHOOK_ALLOW_PRIVATE:-false}
       UNIVERSAL_SITES_FILE: ${UNIVERSAL_SITES_FILE:-}
       UNIVERSAL_SCORER: ${UNIVERSAL_SCORER:-}
       BEHAVIOR_EVENTS_TOPIC: ${BEHAVIOR_EVENTS_TOPIC:-behavior-events}
@@ -242,7 +243,7 @@ services:
     networks:
       - sandbox-net
     ports:
-      - "8001:8001"
+      - "${HOST_BIND:-127.0.0.1}:8001:8001"
     depends_on:
       kafka:
         condition: service_healthy
@@ -330,7 +331,7 @@ services:
       api-proxy-net:
         ipv4_address: ${DASHBOARD_PROXY_IP:-172.30.0.10}
     ports:
-      - "3000:80"
+      - "${HOST_BIND:-127.0.0.1}:3000:80"
     restart: unless-stopped
 
   simulation_portal:
@@ -344,25 +345,25 @@ services:
       api-proxy-net:
         ipv4_address: ${PORTAL_PROXY_IP:-172.30.0.11}
     ports:
-      - "3001:80"
+      - "${HOST_BIND:-127.0.0.1}:3001:80"
     restart: unless-stopped
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v2.53.0
     profiles: ["ops"]
     networks: [neuroshield-net]
     ports:
-      - "9090:9090"
+      - "${HOST_BIND:-127.0.0.1}:9090:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
     restart: unless-stopped
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:11.1.0
     profiles: ["ops"]
     networks: [neuroshield-net]
     ports:
-      - "3002:3000"
+      - "${HOST_BIND:-127.0.0.1}:3002:3000"
     depends_on:
       - prometheus
     volumes:
